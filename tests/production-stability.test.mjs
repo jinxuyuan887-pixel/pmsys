@@ -34,6 +34,27 @@ test("record cost migration supports frozen profit calculations", async () => {
   assert.match(sql, /profit_rate_basis_points/);
 });
 
+test("full demo portfolio seeds ten projects and two hundred service records", async () => {
+  const sql = await read("drizzle/0010_seed_full_demo_portfolio.sql");
+  assert.match(sql, /n < 10/);
+  assert.match(sql, /seq < 200/);
+  assert.match(sql, /seq % 20 = 0 THEN '待审核'/);
+  for (const service of ["EAP大使培训","心理讲座","心理团辅","线上咨询","线下咨询","驻场咨询","心理测评","EAP宣传"]) {
+    assert.match(sql, new RegExp(service));
+  }
+  assert.match(sql, /`is_demo`/);
+  assert.doesNotMatch(sql, /audit_logs/);
+});
+
+test("service record project selection supports fuzzy searching", async () => {
+  const dashboard = await read("app/ui/DashboardApp.tsx");
+  assert.match(dashboard, /function ProjectSearchSelect/);
+  assert.match(dashboard, /\.includes\(normalized\)/);
+  assert.match(dashboard, /aria-autocomplete="list"/);
+  assert.match(dashboard, /allowAll projects=/);
+  assert.match(dashboard, /name="projectId" projects=/);
+});
+
 test("project deletion is archival and demo projects are marked", async () => {
   const route = await read("app/api/projects/route.ts");
   assert.doesNotMatch(route, /delete\(projects\)/);
