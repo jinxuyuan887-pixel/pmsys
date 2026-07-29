@@ -71,6 +71,13 @@
       "when": 1785324000000,
       "tag": "0009_record_cost_profit",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "6",
+      "when": 1785325000000,
+      "tag": "0010_seed_full_demo_portfolio",
+      "breakpoints": true
     }
   ]
 }
