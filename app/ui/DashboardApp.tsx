@@ -461,6 +461,69 @@ function ServiceForm({catalog,onSave}:{catalog:ServiceTemplate[];onSave:(d:FormD
     <div className="modal-actions"><button type="button">取消</button><button className="primary" type="submit">确认添加</button></div>
   </form>;
 }
+
+function ProjectSearchSelect({projects,value,onChange,name,allowAll=false,placeholder="输入项目名称搜索"}:{
+  projects:Project[];
+  value:number|"all";
+  onChange:(value:number|"all")=>void;
+  name?:string;
+  allowAll?:boolean;
+  placeholder?:string;
+}) {
+  const selectedLabel=value==="all"?"全部项目":projects.find(project=>project.id===value)?.name??"";
+  const [query,setQuery]=useState(selectedLabel);
+  const [open,setOpen]=useState(false);
+  const [activeIndex,setActiveIndex]=useState(0);
+  const normalized=query.trim().toLocaleLowerCase("zh-CN");
+  const choices=[
+    ...(allowAll?[{id:"all" as const,name:"全部项目",contract:"查看所有项目"}]:[]),
+    ...projects.map(project=>({id:project.id,name:project.name,contract:project.contract})),
+  ].filter(item=>!normalized||item.name.toLocaleLowerCase("zh-CN").includes(normalized));
+  function choose(id:number|"all"){
+    const label=id==="all"?"全部项目":projects.find(project=>project.id===id)?.name??"";
+    onChange(id);setQuery(label);setOpen(false);setActiveIndex(0);
+  }
+  return <div className="project-combobox">
+    {name&&<input type="hidden" name={name} value={value}/>}
+    <div className="project-combobox-input">
+      <span aria-hidden="true">⌕</span>
+      <input
+        role="combobox"
+        aria-label="搜索并选择项目"
+        aria-expanded={open}
+        aria-controls="project-search-options"
+        aria-autocomplete="list"
+        value={query}
+        placeholder={placeholder}
+        autoComplete="off"
+        onFocus={event=>{setOpen(true);setActiveIndex(0);event.currentTarget.select()}}
+        onChange={event=>{setQuery(event.target.value);setOpen(true);setActiveIndex(0)}}
+        onBlur={()=>window.setTimeout(()=>setOpen(false),120)}
+        onKeyDown={event=>{
+          if(event.key==="ArrowDown"){event.preventDefault();setOpen(true);setActiveIndex(index=>Math.min(index+1,Math.max(choices.length-1,0)))}
+          if(event.key==="ArrowUp"){event.preventDefault();setActiveIndex(index=>Math.max(index-1,0))}
+          if(event.key==="Enter"&&open&&choices[activeIndex]){event.preventDefault();choose(choices[activeIndex].id)}
+          if(event.key==="Escape"){event.preventDefault();setOpen(false);setQuery(selectedLabel)}
+        }}
+      />
+      <button type="button" aria-label="展开项目列表" onMouseDown={event=>event.preventDefault()} onClick={()=>setOpen(current=>!current)}>⌄</button>
+    </div>
+    {open&&<div className="project-combobox-options" id="project-search-options" role="listbox">
+      {choices.length?choices.slice(0,50).map((item,index)=><button
+        type="button"
+        role="option"
+        aria-selected={item.id===value}
+        className={`${item.id===value?"selected ":""}${index===activeIndex?"active":""}`}
+        key={item.id}
+        onMouseDown={event=>event.preventDefault()}
+        onMouseEnter={()=>setActiveIndex(index)}
+        onClick={()=>choose(item.id)}
+      ><span>{item.name}</span><small>{item.contract}</small></button>):<div className="project-combobox-empty">未找到匹配项目，请尝试其他关键词</div>}
+      {choices.length>50&&<div className="project-combobox-hint">结果较多，请继续输入关键词缩小范围</div>}
+    </div>}
+  </div>;
+}
+
 function ManagerRecordForm({projects,onSave,close}:{projects:Project[];onSave:(d:FormData)=>void;close:()=>void}) {
   const [projectId,setProjectId]=useState(projects[0]?.id??0);
   const current=projects.find(project=>project.id===projectId);
@@ -470,7 +533,7 @@ function ManagerRecordForm({projects,onSave,close}:{projects:Project[];onSave:(d
   const profitRate=selectedService&&selectedService.unitPrice>0&&costUnit!==""?(selectedService.unitPrice-Number(costUnit))/selectedService.unitPrice*100:null;
   return <form action={onSave}><div className="modal-title"><h2>项目经理填写服务记录</h2><p>填写成本后保存，系统自动计算本条记录利润率并计入项目汇总。</p></div>
     <div className="record-source"><span>填写身份</span><strong>项目经理 · 当前登录账号</strong></div>
-    <div className="form-grid"><label>所属项目<select name="projectId" value={projectId} onChange={e=>{const id=Number(e.target.value),project=projects.find(item=>item.id===id);setProjectId(id);setServiceId(project?.services[0]?.id??0);setCostUnit("")}}>{projects.map(project=><option value={project.id} key={project.id}>{project.name}</option>)}</select></label>
+    <div className="form-grid"><label>所属项目<ProjectSearchSelect name="projectId" projects={projects} value={projectId} onChange={value=>{const id=Number(value),project=projects.find(item=>item.id===id);setProjectId(id);setServiceId(project?.services[0]?.id??0);setCostUnit("")}}/></label>
       <label>服务内容<select name="serviceId" value={serviceId} onChange={e=>{setServiceId(Number(e.target.value));setCostUnit("")}}>{current?.services.map(service=><option value={service.id} key={service.id}>{service.name}（剩余 {Math.max(0,service.quantity-service.completed)} {service.unit}）</option>)}</select></label>
       <label>记录类型<select name="recordType"><option>讲座／团辅活动记录</option><option>心理咨询台账</option><option>培训活动记录</option><option>驻场服务记录</option><option>EAP宣传记录</option></select></label>
       <label>服务人员<input name="provider" required placeholder="讲师、咨询师或项目经理"/></label>
@@ -491,7 +554,7 @@ function LinkDialog({projects,selectedProjectId,notify,close}:{projects:Project[
     const data=await response.json() as {path:string};setLink(`${window.location.origin}${data.path}`);
   }
   return <form action={generate}><div className="modal-title"><h2>生成项目专属填写链接</h2><p>先绑定项目和服务。外部人员无需选择项目，提交内容自动归集。</p></div>
-    {!link?<div className="form-grid"><label className="full">对应项目<select value={projectId} onChange={e=>setProjectId(Number(e.target.value))}>{projects.map(project=><option value={project.id} key={project.id}>{project.name}</option>)}</select></label>
+    {!link?<div className="form-grid"><label className="full">对应项目<ProjectSearchSelect projects={projects} value={projectId} onChange={value=>setProjectId(Number(value))}/></label>
       <label className="full">对应服务内容<select name="serviceId" key={projectId} required>{current?.services.map(service=><option value={service.id} key={service.id}>{service.name}（{service.unit}）</option>)}</select></label>
       <label>填写表单<select name="formType"><option>心理咨询台账</option><option>讲座／团辅活动记录</option><option>培训活动记录</option><option>驻场服务记录</option><option>EAP宣传记录</option></select></label><label>链接有效期<select name="expiresInDays"><option value="7">7天</option><option value="30">30天</option><option value="">永久有效</option></select></label>
       <label>允许提交次数<select name="maxSubmissions"><option value="1">仅一次</option><option value="9999">可重复提交</option></select></label>
@@ -557,7 +620,7 @@ function Records({records,projects,refresh,notify,onManagerRecord,onLink,onRevie
       <div><small>当前正式筛选金额</small><span className="delivery-metric"><strong>{money(filteredFinance.amount)}</strong><em className={filteredFinance.profitRate!==null&&filteredFinance.profitRate<0?"negative-profit":""}>利润率 {profitRateLabel(filteredFinance.profitRate)}</em></span></div>
       <div><small>当前已完成记录</small><strong>{filtered.filter(record=>record.status==="已完成").length} 条</strong></div>
     </div>
-    <div className="records-filter project-filter"><span>所属项目</span><select value={projectId} onChange={event=>setProjectId(event.target.value==="all"?"all":Number(event.target.value))}><option value="all">全部项目</option>{projects.filter(project=>!project._archivedAt).map(project=><option key={project.id} value={project.id}>{project.name}</option>)}</select></div>
+    <div className="records-filter project-filter"><span>所属项目</span><ProjectSearchSelect allowAll projects={projects.filter(project=>!project._archivedAt)} value={projectId} onChange={setProjectId}/></div>
     <div className="records-filter"><span>服务日期</span>{([["week","本周"],["month","本月"],["all","全部"],["custom","自定义"]] as const).map(([value,label])=><button type="button" key={value} className={period===value?"active":""} onClick={()=>setPeriod(value)}>{label}</button>)}{period==="custom"&&<><input type="date" value={start} onChange={e=>setStart(e.target.value)}/><em>至</em><input type="date" value={end} onChange={e=>setEnd(e.target.value)}/></>}</div>
     <div className="tabs record-status-tabs"><button className={recordStatus==="all"?"active":""} onClick={()=>setRecordStatus("all")}>全部 {timeFiltered.length}</button><button className={recordStatus==="delivered"?"active":""} onClick={()=>setRecordStatus("delivered")}>已交付 {timeFiltered.filter(record=>record.status==="已完成").length}</button><button className={recordStatus==="pending"?"active":""} onClick={()=>setRecordStatus("pending")}>待审核 {timeFiltered.filter(record=>record.status==="待审核").length}</button></div>
     <div className="records-table"><div className="records-row heading"><span>执行时间</span><span>项目／服务</span><span>服务人员</span><span>完成数量</span><span>交付金额</span><span>成本／利润率</span><span>资料</span><span>状态／时间</span><span>操作</span></div>
@@ -642,7 +705,7 @@ function EditRecordForm({record,projects,onSave,close}:{record:ServiceRecord;pro
   const service=current?.services.find(item=>item.id===record.serviceId)??current?.services[0];
   const profitRate=service&&service.unitPrice>0&&costUnit!==""?(service.unitPrice-Number(costUnit))/service.unitPrice*100:null;
   return <form action={onSave}><div className="modal-title"><h2>修改服务记录</h2><p>可修改内部或外部提交内容，保存后金额与进度同步更新。</p></div>
-    <div className="form-grid"><label>所属项目<select name="projectId" value={projectId} onChange={e=>setProjectId(Number(e.target.value))}>{projects.map(project=><option value={project.id} key={project.id}>{project.name}</option>)}</select></label>
+    <div className="form-grid"><label>所属项目<ProjectSearchSelect name="projectId" projects={projects} value={projectId} onChange={value=>setProjectId(Number(value))}/></label>
       <label>服务内容<select name="serviceId" key={projectId} defaultValue={projectId===record.projectId?record.serviceId:current?.services[0]?.id}>{current?.services.map(service=><option value={service.id} key={service.id}>{service.name}</option>)}</select></label>
       <label>记录类型<select name="recordType" defaultValue={record.recordType}><option>讲座／团辅活动记录</option><option>心理咨询台账</option><option>培训活动记录</option><option>驻场服务记录</option><option>EAP宣传记录</option></select></label>
       <label>服务人员<input name="provider" required defaultValue={String(data.provider??"")}/></label>
