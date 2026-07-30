@@ -17,9 +17,11 @@ export async function GET(request:Request){
   if(!file||!file.recordId)return Response.json({error:"附件不存在"},{status:404});
   const {env}=await import("cloudflare:workers"),object=await env.BUCKET.get(file.storageKey);
   if(!object)return Response.json({error:"文件不存在"},{status:404});
+  const inline=url.searchParams.get("inline")==="1"&&file.contentType.startsWith("image/");
   return new Response(object.body,{headers:{
     "content-type":file.contentType,
-    "content-disposition":`attachment; filename*=UTF-8''${encodeURIComponent(file.originalName)}`,
+    "content-disposition":`${inline?"inline":"attachment"}; filename*=UTF-8''${encodeURIComponent(file.originalName)}`,
+    "x-content-type-options":"nosniff",
     "cache-control":"private, no-store"
   }});
 }
