@@ -87,13 +87,15 @@ export default function DashboardApp({currentUser}:{currentUser:CurrentUser}) {
   const [page, setPage] = useState("dashboard");
   const [projects, setProjects] = useState<Project[]>([]);
   const [selectedId, setSelectedId] = useState<number | null>(null);
-  const [modal, setModal] = useState<"project" | "service" | "link" | "managerRecord" | "reviewRecord" | "editRecord" | "account" | "profile" | "securityNotice" | "catalog" | null>(currentUser.mustChangePassword?"securityNotice":null);
+  const [modal, setModal] = useState<"project" | "service" | "link" | "managerRecord" | "viewRecord" | "reviewRecord" | "editRecord" | "account" | "profile" | "securityNotice" | "catalog" | null>(currentUser.mustChangePassword?"securityNotice":null);
   const [catalog,setCatalog]=useState<ServiceTemplate[]>(defaultCatalog);
   const [records,setRecords]=useState<ServiceRecord[]>([]);
   const [editingRecord,setEditingRecord]=useState<ServiceRecord|null>(null);
+  const [viewingRecord,setViewingRecord]=useState<ServiceRecord|null>(null);
   const [reviewingRecord,setReviewingRecord]=useState<ServiceRecord|null>(null);
   const [editing, setEditing] = useState<Project | null>(null);
   const [query, setQuery] = useState("");
+  const [managerFilter,setManagerFilter]=useState("all");
   const [projectView,setProjectView]=useState<"all"|"active"|"finished"|"archived">("all");
   const [toast, setToast] = useState("");
   const selected = projects.find((p) => p.id === selectedId) ?? null;
@@ -110,13 +112,15 @@ export default function DashboardApp({currentUser}:{currentUser:CurrentUser}) {
   };
   const productionProjects=projects.filter(project=>!project._isDemo&&!project._archivedAt);
   const average = productionProjects.length?Math.round(productionProjects.reduce((s, p) => s + projectProgress(p), 0) / productionProjects.length):0;
+  const projectManagers=useMemo(()=>Array.from(new Set(projects.map(project=>project.manager.trim()).filter(Boolean))).sort((a,b)=>a.localeCompare(b,"zh-CN")),[projects]);
+  const managerScopedProjects=projects.filter(project=>managerFilter==="all"||project.manager===managerFilter);
 
   const visibleProjects = useMemo(
-    () => projects.filter((p) => p.name.toLowerCase().includes(query.toLowerCase())).filter(project=>
+    () => projects.filter(project=>managerFilter==="all"||project.manager===managerFilter).filter((p) => p.name.toLowerCase().includes(query.toLowerCase())).filter(project=>
       projectView==="archived"?Boolean(project._archivedAt):
       !project._archivedAt&&(projectView==="all"||(projectView==="finished"&&isProjectFinished(project))||(projectView==="active"&&!isProjectFinished(project)))
     ),
-    [projects, query,projectView]
+    [projects, query,projectView,managerFilter]
   );
 
   async function refreshProjects(){
@@ -335,8 +339,8 @@ export default function DashboardApp({currentUser}:{currentUser:CurrentUser}) {
         {page === "projects" && !selected && (
           <section className="content-card">
             <div className="toolbar"><div className="search">⌕<input value={query} onChange={(e)=>setQuery(e.target.value)} placeholder="搜索项目名称"/></div>
-              <div className="filters"><button>全部状态⌄</button></div></div>
-            <div className="tabs project-tabs"><button className={projectView==="all"?"active":""} onClick={()=>setProjectView("all")}>全部项目 {projects.filter(p=>!p._archivedAt).length}</button><button className={projectView==="active"?"active":""} onClick={()=>setProjectView("active")}>进行中 {projects.filter(project=>!project._archivedAt&&!isProjectFinished(project)).length}</button><button className={projectView==="finished"?"active":""} onClick={()=>setProjectView("finished")}>已结束 {projects.filter(project=>!project._archivedAt&&isProjectFinished(project)).length}</button><button className={projectView==="archived"?"active":""} onClick={()=>setProjectView("archived")}>已归档 {projects.filter(project=>project._archivedAt).length}</button></div>
+              <div className="filters manager-select"><label><span>项目经理</span><select value={managerFilter} onChange={event=>setManagerFilter(event.target.value)}><option value="all">全部项目经理</option>{projectManagers.map(manager=><option value={manager} key={manager}>{manager}</option>)}</select></label></div></div>
+            <div className="tabs project-tabs"><button className={projectView==="all"?"active":""} onClick={()=>setProjectView("all")}>全部项目 {managerScopedProjects.filter(p=>!p._archivedAt).length}</button><button className={projectView==="active"?"active":""} onClick={()=>setProjectView("active")}>进行中 {managerScopedProjects.filter(project=>!project._archivedAt&&!isProjectFinished(project)).length}</button><button className={projectView==="finished"?"active":""} onClick={()=>setProjectView("finished")}>已结束 {managerScopedProjects.filter(project=>!project._archivedAt&&isProjectFinished(project)).length}</button><button className={projectView==="archived"?"active":""} onClick={()=>setProjectView("archived")}>已归档 {managerScopedProjects.filter(project=>project._archivedAt).length}</button></div>
             <div className="project-cards">
               {visibleProjects.map((p)=><article key={p.id} onClick={()=>setSelectedId(p.id)}>
                 <div className="card-head"><Status value={isProjectFinished(p)?"已完成":p.status}/><button onClick={(e)=>{e.stopPropagation(); openProject(p)}}>•••</button></div>
@@ -378,7 +382,7 @@ export default function DashboardApp({currentUser}:{currentUser:CurrentUser}) {
           </section>
         )}
 
-        {page === "records" && !selected && <Records records={records} projects={projects.filter(project=>!project._archivedAt)} refresh={async()=>{await Promise.all([refreshRecords(),refreshProjects()])}} notify={notify} onManagerRecord={()=>setModal("managerRecord")} onLink={()=>setModal("link")} onReview={(record)=>{setReviewingRecord(record);setModal("reviewRecord")}} onEdit={(record)=>{setEditingRecord(record);setModal("editRecord")}}/>}
+        {page === "records" && !selected && <Records records={records} projects={projects.filter(project=>!project._archivedAt)} managerFilter={managerFilter} onManagerFilterChange={setManagerFilter} refresh={async()=>{await Promise.all([refreshRecords(),refreshProjects()])}} notify={notify} onManagerRecord={()=>setModal("managerRecord")} onLink={()=>setModal("link")} onView={(record)=>{setViewingRecord(record);setModal("viewRecord")}} onReview={(record)=>{setReviewingRecord(record);setModal("reviewRecord")}} onEdit={(record)=>{setEditingRecord(record);setModal("editRecord")}}/>}
         {page === "links" && !selected && <ExternalLinks projects={projects} notify={notify} onAdd={()=>setModal("link")}/>}
         {page === "governance" && !selected && <Governance/>}
         {page === "catalog" && !selected && <ServiceCatalog items={catalog} onChange={saveCatalog} onAdd={()=>setModal("catalog")}/>}
@@ -392,6 +396,7 @@ export default function DashboardApp({currentUser}:{currentUser:CurrentUser}) {
           {modal === "service" && <ServiceForm catalog={catalog} onSave={saveService}/>}
           {modal === "link" && <LinkDialog projects={projects.filter(project=>!project._archivedAt)} selectedProjectId={selected?.id} notify={notify} close={()=>setModal(null)}/>}
           {modal === "managerRecord" && <ManagerRecordForm projects={projects.filter(project=>!project._archivedAt)} onSave={saveManagerRecord} close={()=>setModal(null)}/>}
+          {modal === "viewRecord" && viewingRecord && <ViewRecordDialog record={viewingRecord} projects={projects} close={()=>{setModal(null);setViewingRecord(null)}}/>}
           {modal === "reviewRecord" && reviewingRecord && <ReviewRecordDialog record={reviewingRecord} projects={projects} notify={notify} close={()=>{setModal(null);setReviewingRecord(null)}} onApproved={async()=>{setModal(null);setReviewingRecord(null);await Promise.all([refreshRecords(),refreshProjects()])}}/>}
           {modal === "editRecord" && editingRecord && <EditRecordForm record={editingRecord} projects={projects.filter(project=>!project._archivedAt)} onSave={saveEditedRecord} close={()=>{setModal(null);setEditingRecord(null)}}/>}
           {modal === "account" && <AccountForm notify={notify} close={()=>setModal(null)}/>}
@@ -553,17 +558,16 @@ function LinkDialog({projects,selectedProjectId,notify,close}:{projects:Project[
     if(!response.ok){notify("链接生成失败，请重试");return}
     const data=await response.json() as {path:string};setLink(`${window.location.origin}${data.path}`);
   }
-  return <form action={generate}><div className="modal-title"><h2>生成项目专属填写链接</h2><p>先绑定项目和服务。外部人员无需选择项目，提交内容自动归集。</p></div>
+  return <form action={generate}><div className="modal-title"><h2>生成项目专属填写链接</h2><p>先绑定项目和服务。外部人员无需选择项目，提交后自动归集并进入待审核。</p></div>
     {!link?<div className="form-grid"><label className="full">对应项目<ProjectSearchSelect projects={projects} value={projectId} onChange={value=>setProjectId(Number(value))}/></label>
       <label className="full">对应服务内容<select name="serviceId" key={projectId} required>{current?.services.map(service=><option value={service.id} key={service.id}>{service.name}（{service.unit}）</option>)}</select></label>
       <label>填写表单<select name="formType"><option>心理咨询台账</option><option>讲座／团辅活动记录</option><option>培训活动记录</option><option>驻场服务记录</option><option>EAP宣传记录</option></select></label><label>链接有效期<select name="expiresInDays"><option value="7">7天</option><option value="30">30天</option><option value="">永久有效</option></select></label>
-      <label>允许提交次数<select name="maxSubmissions"><option value="1">仅一次</option><option value="9999">可重复提交</option></select></label>
-      <label className="check"><input type="checkbox" defaultChecked disabled/> 提交后进入待审核状态</label></div>:
+      <label className="full">允许提交次数<select name="maxSubmissions"><option value="1">仅一次</option><option value="9999">可重复提交</option></select></label></div>:
       <div className="generated-link"><span>✓</span><h3>项目专属链接已生成</h3><p>{link}</p><small>外部页面不显示项目金额，记录将自动归集至已绑定项目</small></div>}
     <div className="modal-actions"><button type="button" onClick={close}>关闭</button>{!link?<button className="primary">生成链接</button>:<button type="button" className="primary" onClick={()=>{navigator.clipboard?.writeText(link);notify("填写链接已复制")}}>复制链接</button>}</div>
   </form>;
 }
-function Records({records,projects,refresh,notify,onManagerRecord,onLink,onReview,onEdit}:{records:ServiceRecord[];projects:Project[];refresh:()=>Promise<void>;notify:(s:string)=>void;onManagerRecord:()=>void;onLink:()=>void;onReview:(record:ServiceRecord)=>void;onEdit:(record:ServiceRecord)=>void}) {
+function Records({records,projects,managerFilter,onManagerFilterChange,refresh,notify,onManagerRecord,onLink,onView,onReview,onEdit}:{records:ServiceRecord[];projects:Project[];managerFilter:string;onManagerFilterChange:(manager:string)=>void;refresh:()=>Promise<void>;notify:(s:string)=>void;onManagerRecord:()=>void;onLink:()=>void;onView:(record:ServiceRecord)=>void;onReview:(record:ServiceRecord)=>void;onEdit:(record:ServiceRecord)=>void}) {
   const [period,setPeriod]=useState<"week"|"month"|"all"|"custom">("month");
   const [recordStatus,setRecordStatus]=useState<"all"|"delivered"|"pending">("all");
   const [projectId,setProjectId]=useState<"all"|number>("all");
@@ -573,6 +577,9 @@ function Records({records,projects,refresh,notify,onManagerRecord,onLink,onRevie
   const today=new Date();today.setHours(23,59,59,999);
   const weekStart=new Date(today);weekStart.setDate(today.getDate()-((today.getDay()+6)%7));weekStart.setHours(0,0,0,0);
   const monthStart=new Date(today.getFullYear(),today.getMonth(),1);
+  const managers=Array.from(new Set(projects.map(project=>project.manager.trim()).filter(Boolean))).sort((a,b)=>a.localeCompare(b,"zh-CN"));
+  const managerProjects=projects.filter(project=>managerFilter==="all"||project.manager===managerFilter);
+  const managerProjectIds=new Set(managerProjects.map(project=>project.id));
   const inRange=(record:ServiceRecord)=>{
     const date=recordDate(record);
     if(period==="week")return date>=weekStart&&date<=today;
@@ -580,7 +587,7 @@ function Records({records,projects,refresh,notify,onManagerRecord,onLink,onRevie
     if(period==="custom")return (!start||date>=new Date(`${start}T00:00:00`))&&(!end||date<=new Date(`${end}T23:59:59`));
     return true;
   };
-  const projectFiltered=records.filter(record=>projectId==="all"||record.projectId===projectId);
+  const projectFiltered=records.filter(record=>managerProjectIds.has(record.projectId)&&(projectId==="all"||record.projectId===projectId));
   const timeFiltered=projectFiltered.filter(inRange);
   const filtered=timeFiltered.filter(record=>recordStatus==="all"||(recordStatus==="delivered"&&record.status==="已完成")||(recordStatus==="pending"&&record.status==="待审核")).sort((a,b)=>recordDate(b).getTime()-recordDate(a).getTime()||(b.id-a.id));
   const recordTimestamp=(record:ServiceRecord)=>{
@@ -620,13 +627,13 @@ function Records({records,projects,refresh,notify,onManagerRecord,onLink,onRevie
       <div><small>当前正式筛选金额</small><span className="delivery-metric"><strong>{money(filteredFinance.amount)}</strong><em className={filteredFinance.profitRate!==null&&filteredFinance.profitRate<0?"negative-profit":""}>利润率 {profitRateLabel(filteredFinance.profitRate)}</em></span></div>
       <div><small>当前已完成记录</small><strong>{filtered.filter(record=>record.status==="已完成").length} 条</strong></div>
     </div>
-    <div className="records-filter project-filter"><span>所属项目</span><ProjectSearchSelect allowAll projects={projects.filter(project=>!project._archivedAt)} value={projectId} onChange={setProjectId}/></div>
+    <div className="records-filter record-project-filters"><label><span>项目经理</span><select value={managerFilter} onChange={event=>{onManagerFilterChange(event.target.value);setProjectId("all")}}><option value="all">全部项目经理</option>{managers.map(manager=><option value={manager} key={manager}>{manager}</option>)}</select></label><label className="project-search-filter"><span>所属项目</span><ProjectSearchSelect allowAll projects={managerProjects} value={projectId} onChange={setProjectId}/></label></div>
     <div className="records-filter"><span>服务日期</span>{([["week","本周"],["month","本月"],["all","全部"],["custom","自定义"]] as const).map(([value,label])=><button type="button" key={value} className={period===value?"active":""} onClick={()=>setPeriod(value)}>{label}</button>)}{period==="custom"&&<><input type="date" value={start} onChange={e=>setStart(e.target.value)}/><em>至</em><input type="date" value={end} onChange={e=>setEnd(e.target.value)}/></>}</div>
     <div className="tabs record-status-tabs"><button className={recordStatus==="all"?"active":""} onClick={()=>setRecordStatus("all")}>全部 {timeFiltered.length}</button><button className={recordStatus==="delivered"?"active":""} onClick={()=>setRecordStatus("delivered")}>已交付 {timeFiltered.filter(record=>record.status==="已完成").length}</button><button className={recordStatus==="pending"?"active":""} onClick={()=>setRecordStatus("pending")}>待审核 {timeFiltered.filter(record=>record.status==="待审核").length}</button></div>
     <div className="records-table"><div className="records-row heading"><span>执行时间</span><span>项目／服务</span><span>服务人员</span><span>完成数量</span><span>交付金额</span><span>成本／利润率</span><span>资料</span><span>状态／时间</span><span>操作</span></div>
       {filtered.length===0?<div className="empty-records"><strong>当前时间范围暂无服务记录</strong><span>可切换本周、本月、全部或自定义日期查看</span></div>:filtered.map(record=>{
         const data=record.payload.data??{},amount=recordAmount(record),service=serviceFor(record);
-        return <div className="records-row" key={record.id}><span>{recordDate(record).toLocaleDateString("zh-CN")}</span><span>{recordLabel(record)}</span><span>{String(data.provider??"未填写")}</span><span>{Number(data.quantity??1)} {service?.unit??"次"}</span><span className="amount-cell">{amount===null?"审核后冻结":money(amount)}</span><span className="profit-cell">{record.status==="已完成"?<><strong>{money(record.costAmountSnapshot??0)}</strong><small className={(record.profitRateBasisPoints??0)<0?"negative-profit":""}>{((record.profitRateBasisPoints??0)/100).toFixed(1)}%</small></>:<small>审核时填写</small>}</span><Attachments recordId={record.id}/><span className="record-time"><Status value={record.status==="已完成"?"已交付":record.status}/><small>{record.status==="已完成"?"审核":"提交/修改"} {recordTimestamp(record)}</small></span><span className="row-actions">{record.status==="待审核"&&<button onClick={()=>onReview(record)}>审核</button>}<button onClick={()=>onEdit(record)}>修改</button><button className="danger-action" disabled={deletingId===record.id} onClick={()=>remove(record)}>{deletingId===record.id?"作废中…":"作废"}</button></span></div>
+        return <div className="records-row" key={record.id}><span>{recordDate(record).toLocaleDateString("zh-CN")}</span><span>{recordLabel(record)}</span><span>{String(data.provider??"未填写")}</span><span>{Number(data.quantity??1)} {service?.unit??"次"}</span><span className="amount-cell">{amount===null?"审核后冻结":money(amount)}</span><span className="profit-cell">{record.status==="已完成"?<><strong>{money(record.costAmountSnapshot??0)}</strong><small className={(record.profitRateBasisPoints??0)<0?"negative-profit":""}>{((record.profitRateBasisPoints??0)/100).toFixed(1)}%</small></>:<small>审核时填写</small>}</span><Attachments recordId={record.id}/><span className="record-time"><Status value={record.status==="已完成"?"已交付":record.status}/><small>{record.status==="已完成"?"审核":"提交/修改"} {recordTimestamp(record)}</small></span><span className="row-actions"><button onClick={()=>onView(record)}>查看</button>{record.status==="待审核"&&<button onClick={()=>onReview(record)}>审核</button>}<button onClick={()=>onEdit(record)}>修改</button><button className="danger-action" disabled={deletingId===record.id} onClick={()=>remove(record)}>{deletingId===record.id?"作废中…":"作废"}</button></span></div>
       })}
     </div>
   </section>;
@@ -637,6 +644,28 @@ const recordFieldLabels:Record<string,string>={
   method:"咨询方式",duration:"咨询时长（分钟）",issueType:"问题类型",risk:"风险情况",
   topic:"活动主题",participants:"参与人数",location:"活动地点",source:"填写来源"
 };
+function ViewRecordDialog({record,projects,close}:{record:ServiceRecord;projects:Project[];close:()=>void}){
+  const project=projects.find(item=>item.id===record.projectId);
+  const service=project?.services.find(item=>item.id===record.serviceId);
+  const data=record.payload.data??{};
+  const hidden=new Set(["projectId","serviceId","recordType","status","costUnit"]);
+  const details=Object.entries(data).filter(([key,value])=>!hidden.has(key)&&value!==""&&value!==null&&value!==undefined);
+  const timestamp=record.status==="已完成"&&record.approvedAt?record.approvedAt:record.updatedAt||record.createdAt;
+  return <div className="review-dialog view-record-dialog">
+    <div className="modal-title"><h2>查看服务记录</h2><p>以下为该条记录当前保存的完整填写内容、状态与附件。</p></div>
+    <div className="review-head"><div><small>所属项目</small><strong>{project?.name??"项目已归档"}</strong></div><div><small>服务内容</small><strong>{service?.name??record.recordType}</strong></div><div><small>记录类型</small><strong>{record.recordType}</strong></div><Status value={record.status==="已完成"?"已交付":record.status}/></div>
+    <section className="review-section"><h3>填写内容</h3><div className="review-details">
+      {details.length?details.map(([key,value])=><div className={key==="summary"?"wide":""} key={key}><small>{recordFieldLabels[key]??key}</small><strong>{String(value)}</strong></div>):<div className="wide"><small>填写内容</small><strong>暂无其他填写内容</strong></div>}
+    </div></section>
+    <section className="review-section"><h3>活动资料与附件</h3><Attachments recordId={record.id} previewImages/></section>
+    <section className="review-section record-meta"><h3>记录信息</h3><div className="review-details">
+      <div><small>提交时间</small><strong>{new Date(record.createdAt).toLocaleString("zh-CN")}</strong></div>
+      <div><small>{record.status==="已完成"?"审核时间":"最近修改时间"}</small><strong>{new Date(timestamp).toLocaleString("zh-CN")}</strong></div>
+      <div><small>完成数量</small><strong>{Number(data.quantity??1)} {service?.unit??"次"}</strong></div>
+    </div></section>
+    <div className="modal-actions"><button type="button" className="primary" onClick={close}>关闭</button></div>
+  </div>;
+}
 function ReviewRecordDialog({record,projects,notify,close,onApproved}:{record:ServiceRecord;projects:Project[];notify:(s:string)=>void;close:()=>void;onApproved:()=>Promise<void>}){
   const [costUnit,setCostUnit]=useState("");
   const [submitting,setSubmitting]=useState(false);
@@ -660,7 +689,7 @@ function ReviewRecordDialog({record,projects,notify,close,onApproved}:{record:Se
     <section className="review-section"><h3>提交内容</h3><div className="review-details">
       {details.map(([key,value])=><div className={key==="summary"?"wide":""} key={key}><small>{recordFieldLabels[key]??key}</small><strong>{String(value)}</strong></div>)}
     </div></section>
-    <section className="review-section"><h3>活动资料与附件</h3><Attachments recordId={record.id}/></section>
+    <section className="review-section"><h3>活动资料与附件</h3><Attachments recordId={record.id} previewImages/></section>
     <section className="review-section review-finance"><h3>审核及成本确认</h3><div className="review-finance-grid">
       <div><small>服务单价</small><strong>{money(service?.unitPrice??0)} / {service?.unit??"次"}</strong></div>
       <label>本次成本单价（元）<input aria-label="审核成本单价" type="number" min="0" step="0.01" value={costUnit} onChange={e=>setCostUnit(e.target.value)} required placeholder="必填后方可审核"/></label>
@@ -671,10 +700,21 @@ function ReviewRecordDialog({record,projects,notify,close,onApproved}:{record:Se
   </div>;
 }
 
-function Attachments({recordId}:{recordId:number}){
-  const [files,setFiles]=useState<Array<{id:number;name:string}>>([]);
+function Attachments({recordId,previewImages=false}:{recordId:number;previewImages?:boolean}){
+  const [files,setFiles]=useState<Array<{id:number;name:string;contentType?:string;size?:number}>>([]);
   useEffect(()=>{fetch(`/api/files?recordId=${recordId}`).then(response=>response.ok?response.json():{files:[]}).then(data=>setFiles(data.files??[])).catch(()=>undefined)},[recordId]);
   if(!files.length)return <span>无附件</span>;
+  if(previewImages)return <div className="attachment-gallery">{files.map(file=>{
+    const isImage=file.contentType?.startsWith("image/");
+    return <a className={isImage?"image-attachment":"file-attachment"} key={file.id} href={`/api/files?id=${file.id}${isImage?"&inline=1":""}`} target="_blank" rel="noreferrer">
+      {isImage?<>
+        <span className="sr-only">{file.name}</span>
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img src={`/api/files?id=${file.id}&inline=1`} alt={file.name}/>
+      </>:<span className="file-icon">文档</span>}
+      <span><strong>{file.name}</strong><small>{isImage?"点击查看大图":"点击打开或下载"}{file.size?` · ${(file.size/1024/1024).toFixed(1)} MB`:""}</small></span>
+    </a>;
+  })}</div>;
   return <span className="attachment-links">{files.map(file=><a key={file.id} href={`/api/files?id=${file.id}`} target="_blank" rel="noreferrer">{file.name}</a>)}</span>;
 }
 
