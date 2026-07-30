@@ -51,6 +51,7 @@ const nav = [
   ["dashboard", "⌂", "工作台"],
   ["projects", "▣", "项目管理"],
   ["records", "▤", "服务记录"],
+  ["consultants", "♧", "咨询师归集"],
   ["links", "↗", "填写链接"],
   ["governance", "◫", "操作日志"],
   ["catalog", "☷", "服务目录"],
@@ -383,6 +384,7 @@ export default function DashboardApp({currentUser}:{currentUser:CurrentUser}) {
         )}
 
         {page === "records" && !selected && <Records records={records} projects={projects.filter(project=>!project._archivedAt)} managerFilter={managerFilter} onManagerFilterChange={setManagerFilter} refresh={async()=>{await Promise.all([refreshRecords(),refreshProjects()])}} notify={notify} onManagerRecord={()=>setModal("managerRecord")} onLink={()=>setModal("link")} onView={(record)=>{setViewingRecord(record);setModal("viewRecord")}} onReview={(record)=>{setReviewingRecord(record);setModal("reviewRecord")}} onEdit={(record)=>{setEditingRecord(record);setModal("editRecord")}}/>}
+        {page === "consultants" && !selected && <Consultants records={records} projects={projects} onView={(record)=>{setViewingRecord(record);setModal("viewRecord")}}/>}
         {page === "links" && !selected && <ExternalLinks projects={projects} notify={notify} onAdd={()=>setModal("link")}/>}
         {page === "governance" && !selected && <Governance/>}
         {page === "catalog" && !selected && <ServiceCatalog items={catalog} onChange={saveCatalog} onAdd={()=>setModal("catalog")}/>}
@@ -635,6 +637,61 @@ function Records({records,projects,managerFilter,onManagerFilterChange,refresh,n
         const data=record.payload.data??{},amount=recordAmount(record),service=serviceFor(record);
         return <div className="records-row" key={record.id}><span>{recordDate(record).toLocaleDateString("zh-CN")}</span><span>{recordLabel(record)}</span><span>{String(data.provider??"未填写")}</span><span>{Number(data.quantity??1)} {service?.unit??"次"}</span><span className="amount-cell">{amount===null?"审核后冻结":money(amount)}</span><span className="profit-cell">{record.status==="已完成"?<><strong>{money(record.costAmountSnapshot??0)}</strong><small className={(record.profitRateBasisPoints??0)<0?"negative-profit":""}>{((record.profitRateBasisPoints??0)/100).toFixed(1)}%</small></>:<small>审核时填写</small>}</span><Attachments recordId={record.id}/><span className="record-time"><Status value={record.status==="已完成"?"已交付":record.status}/><small>{record.status==="已完成"?"审核":"提交/修改"} {recordTimestamp(record)}</small></span><span className="row-actions"><button onClick={()=>onView(record)}>查看</button>{record.status==="待审核"&&<button onClick={()=>onReview(record)}>审核</button>}<button onClick={()=>onEdit(record)}>修改</button><button className="danger-action" disabled={deletingId===record.id} onClick={()=>remove(record)}>{deletingId===record.id?"作废中…":"作废"}</button></span></div>
       })}
+    </div>
+  </section>;
+}
+
+function Consultants({records,projects,onView}:{records:ServiceRecord[];projects:Project[];onView:(record:ServiceRecord)=>void}){
+  const approved=records.filter(record=>record.status==="已完成"&&String(record.payload.data?.provider??"").trim());
+  const consultants=Array.from(new Set(approved.map(record=>String(record.payload.data?.provider).trim()))).sort((a,b)=>a.localeCompare(b,"zh-CN"));
+  const [consultant,setConsultant]=useState("all");
+  const [query,setQuery]=useState("");
+  const visibleConsultants=consultants.filter(name=>name.toLowerCase().includes(query.trim().toLowerCase()));
+  const filtered=approved.filter(record=>consultant==="all"||String(record.payload.data?.provider).trim()===consultant)
+    .sort((a,b)=>new Date(String(b.payload.data?.date??b.createdAt)).getTime()-new Date(String(a.payload.data?.date??a.createdAt)).getTime()||b.id-a.id);
+  const totalQuantity=filtered.reduce((sum,record)=>sum+Number(record.payload.data?.quantity??1),0);
+  const totalCost=filtered.reduce((sum,record)=>sum+(record.costAmountSnapshot??0),0);
+  const servicesFor=(record:ServiceRecord)=>{
+    const project=projects.find(item=>item.id===record.projectId);
+    return {project,service:project?.services.find(item=>item.id===record.serviceId)};
+  };
+  const priceGroups=Array.from(filtered.reduce((groups,record)=>{
+    const {service}=servicesFor(record);
+    const provider=String(record.payload.data?.provider).trim();
+    const price=record.costUnitSnapshot??0;
+    const key=`${provider}\u0000${service?.name??record.recordType}\u0000${price}`;
+    const current=groups.get(key)??{provider,serviceName:service?.name??record.recordType,unit:service?.unit??"次",price,quantity:0,count:0,total:0};
+    current.quantity+=Number(record.payload.data?.quantity??1);current.count+=1;current.total+=record.costAmountSnapshot??0;
+    groups.set(key,current);return groups;
+  },new Map<string,{provider:string;serviceName:string;unit:string;price:number;quantity:number;count:number;total:number}>()).values())
+    .sort((a,b)=>a.provider.localeCompare(b.provider,"zh-CN")||a.serviceName.localeCompare(b.serviceName,"zh-CN")||b.price-a.price);
+  return <section className="content-card consultant-page">
+    <div className="section-title"><div><h2>咨询师归集</h2><p>仅统计已审核交付记录；服务价格取项目经理审核时确认的成本单价</p></div></div>
+    <div className="consultant-summary">
+      <div><small>已归集咨询师</small><strong>{consultant==="all"?consultants.length:filtered.length?1:0} 人</strong></div>
+      <div><small>已审核服务记录</small><strong>{filtered.length} 条</strong></div>
+      <div><small>累计服务数量</small><strong>{totalQuantity.toLocaleString("zh-CN")}</strong></div>
+      <div><small>累计服务成本</small><strong>{money(totalCost)}</strong></div>
+    </div>
+    <div className="consultant-filter">
+      <label><span>搜索咨询师</span><input value={query} onChange={event=>setQuery(event.target.value)} placeholder="输入姓名模糊搜索"/></label>
+      <label><span>咨询师姓名</span><select value={consultant} onChange={event=>setConsultant(event.target.value)}><option value="all">全部咨询师</option>{visibleConsultants.map(name=><option value={name} key={name}>{name}</option>)}</select></label>
+      {consultant!=="all"&&<button type="button" onClick={()=>{setConsultant("all");setQuery("")}}>清除筛选</button>}
+    </div>
+    <div className="consultant-section-title"><div><h3>服务价格汇总</h3><p>同一咨询师的不同服务、不同审核价格分别归集</p></div><span>{priceGroups.length} 个价格项</span></div>
+    <div className="consultant-price-table">
+      <div className="consultant-price-row heading"><span>咨询师</span><span>服务内容</span><span>服务价格</span><span>服务数量</span><span>记录数</span><span>累计成本</span></div>
+      {priceGroups.map(group=><div className="consultant-price-row" key={`${group.provider}-${group.serviceName}-${group.price}`}><strong>{group.provider}</strong><span>{group.serviceName}</span><span className="consultant-price">{money(group.price)} / {group.unit}</span><span>{group.quantity} {group.unit}</span><span>{group.count} 条</span><strong>{money(group.total)}</strong></div>)}
+      {!priceGroups.length&&<div className="empty-records"><strong>暂无符合条件的已审核记录</strong><span>审核服务记录并填写成本后，将自动归集到这里</span></div>}
+    </div>
+    <div className="consultant-section-title detail-title"><div><h3>服务明细</h3><p>数据与服务记录同步，按执行时间从近到远排列</p></div><span>{filtered.length} 条</span></div>
+    <div className="consultant-detail-table">
+      <div className="consultant-detail-row heading"><span>执行时间</span><span>咨询师</span><span>项目／服务</span><span>服务数量</span><span>服务价格</span><span>服务成本</span><span>审核时间</span><span>操作</span></div>
+      {filtered.map(record=>{
+        const {project,service}=servicesFor(record),data=record.payload.data??{};
+        return <div className="consultant-detail-row" key={record.id}><span>{new Date(String(data.date??record.createdAt)).toLocaleDateString("zh-CN")}</span><strong>{String(data.provider).trim()}</strong><span><strong>{project?.name??"已归档项目"}</strong><small>{service?.name??record.recordType}</small></span><span>{Number(data.quantity??1)} {service?.unit??"次"}</span><span className="consultant-price">{money(record.costUnitSnapshot??0)} / {service?.unit??"次"}</span><strong>{money(record.costAmountSnapshot??0)}</strong><span>{new Date(record.approvedAt??record.updatedAt??record.createdAt).toLocaleString("zh-CN",{month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit"})}</span><button onClick={()=>onView(record)}>查看</button></div>;
+      })}
+      {!filtered.length&&<div className="empty-records"><strong>暂无服务明细</strong><span>请更换咨询师筛选条件</span></div>}
     </div>
   </section>;
 }
