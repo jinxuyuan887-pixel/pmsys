@@ -85,6 +85,18 @@ test("external link dialog omits the redundant pending-review control", async ()
   assert.match(recordsRoute, /body\.token\?"待审核":"已完成"/);
 });
 
+test("consultant aggregation uses approved provider records and frozen cost prices", async () => {
+  const dashboard = await read("app/ui/DashboardApp.tsx");
+  assert.match(dashboard, /\["consultants", "♧", "咨询师归集"\]/);
+  assert.match(dashboard, /function Consultants/);
+  assert.match(dashboard, /record\.status==="已完成"/);
+  assert.match(dashboard, /record\.payload\.data\?\.provider/);
+  assert.match(dashboard, /record\.costUnitSnapshot/);
+  assert.match(dashboard, /record\.costAmountSnapshot/);
+  assert.match(dashboard, /同一咨询师的不同服务、不同审核价格分别归集/);
+  assert.match(dashboard, /输入姓名模糊搜索/);
+});
+
 test("project deletion is archival and demo projects are marked", async () => {
   const route = await read("app/api/projects/route.ts");
   assert.doesNotMatch(route, /delete\(projects\)/);
