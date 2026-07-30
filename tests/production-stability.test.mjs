@@ -55,6 +55,36 @@ test("service record project selection supports fuzzy searching", async () => {
   assert.match(dashboard, /name="projectId" projects=/);
 });
 
+test("project and service record views filter by project manager", async () => {
+  const dashboard = await read("app/ui/DashboardApp.tsx");
+  assert.match(dashboard, /const \[managerFilter,setManagerFilter\]=useState\("all"\)/);
+  assert.match(dashboard, /project\.manager===managerFilter/);
+  assert.match(dashboard, /全部项目经理/);
+  assert.match(dashboard, /managerProjectIds\.has\(record\.projectId\)/);
+  assert.match(dashboard, /onManagerFilterChange\(event\.target\.value\);setProjectId\("all"\)/);
+});
+
+test("service records expose a read-only detail view with image previews", async () => {
+  const dashboard = await readFile(new URL("../app/ui/DashboardApp.tsx", import.meta.url), "utf8");
+  const filesRoute = await readFile(new URL("../app/api/files/route.ts", import.meta.url), "utf8");
+  assert.match(dashboard, /onView=\{\(record\)=>\{setViewingRecord\(record\);setModal\("viewRecord"\)\}\}/);
+  assert.match(dashboard, />查看<\/button>/);
+  assert.match(dashboard, /function ViewRecordDialog/);
+  assert.match(dashboard, /<Attachments recordId=\{record\.id\} previewImages\/>/);
+  assert.match(dashboard, /file\.contentType\?\.startsWith\("image\/"\)/);
+  assert.match(filesRoute, /searchParams\.get\("inline"\)==="1"/);
+  assert.match(filesRoute, /"x-content-type-options":"nosniff"/);
+});
+
+test("external link dialog omits the redundant pending-review control", async () => {
+  const dashboard = await readFile(new URL("../app/ui/DashboardApp.tsx", import.meta.url), "utf8");
+  const recordsRoute = await readFile(new URL("../app/api/records/route.ts", import.meta.url), "utf8");
+  assert.doesNotMatch(dashboard, /提交后进入待审核状态/);
+  assert.match(dashboard, /提交后自动归集并进入待审核/);
+  assert.match(dashboard, /className="full">允许提交次数/);
+  assert.match(recordsRoute, /body\.token\?"待审核":"已完成"/);
+});
+
 test("project deletion is archival and demo projects are marked", async () => {
   const route = await read("app/api/projects/route.ts");
   assert.doesNotMatch(route, /delete\(projects\)/);
@@ -67,4 +97,19 @@ test("external links support management and strong random tokens", async () => {
   assert.match(route, /randomHex\(24\)/);
   assert.match(route, /export async function PATCH/);
   assert.match(route, /submissionCount/);
+});
+
+test("external forms show consultation fields only for consultation services", async () => {
+  const form = await read("app/form/[token]/service-form.tsx");
+  const route = await read("app/api/records/route.ts");
+  for (const service of ["线上咨询","线下咨询","驻场咨询"]) {
+    assert.match(form, new RegExp(service));
+    assert.match(route, new RegExp(service));
+  }
+  assert.match(form, /consultationServices\.has\(meta\.serviceName\)/);
+  assert.match(form, /咨询时长（分钟）/);
+  assert.match(form, /咨询概括/);
+  assert.match(route, /validateExternalService\(target\.service\.name,body\.data\)/);
+  assert.match(route, /type=recordTypeForService\(target\.service\.name,type\)/);
+  assert.match(route, /咨询时长必须大于0且不超过1440分钟/);
 });
