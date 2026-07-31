@@ -23,7 +23,7 @@ export async function PATCH(request:Request){
   const body=await request.json() as {id?:number;active?:boolean;newPassword?:string};
   const db=await getDb();
   if(body.newPassword!==undefined){
-    if(auth.user!.username!=="lanlan666")return Response.json({error:"仅系统主管理员可重置其他账号密码"},{status:403});
+    if(auth.user!.username!=="ydleapadmin")return Response.json({error:"仅系统主管理员可重置其他账号密码"},{status:403});
     if(!body.id||body.id===auth.user!.id||body.newPassword.length<6)return Response.json({error:"临时密码至少6位"},{status:400});
     const salt=randomHex(16);
     await db.batch([
@@ -35,7 +35,7 @@ export async function PATCH(request:Request){
   }
   if(!body.id||body.id===auth.user!.id)return Response.json({error:"不能停用当前账号"},{status:400});
   const [target]=await db.select().from(users).where(eq(users.id,body.id)).limit(1);
-  if(target?.username==="lanlan666")return Response.json({error:"系统主管理员不能停用"},{status:400});
+  if(target?.username==="ydleapadmin")return Response.json({error:"系统主管理员不能停用"},{status:400});
   await db.batch([
     db.update(users).set({active:Boolean(body.active)}).where(eq(users.id,body.id)),
     ...(!body.active?[db.delete(sessions).where(eq(sessions.userId,body.id))]:[]),

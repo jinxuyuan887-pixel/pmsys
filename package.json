@@ -16,6 +16,7 @@
     "db:generate": "bash scripts/sites-env.sh -- drizzle-kit generate"
   },
   "dependencies": {
+    "better-sqlite3": "13.0.2",
     "drizzle-orm": "0.45.2",
     "next": "16.2.6",
     "react": "19.2.6",
@@ -40,5 +41,5 @@
     "wrangler": "4.92.0"
   },
   "type": "module",
-  "displayName": "EAP \u9879\u76ee\u7ba1\u7406\u7cfb\u7edf"
+  "displayName": "EAP 项目管理系统"
 }

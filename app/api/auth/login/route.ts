@@ -2,6 +2,7 @@ import { and, eq, gte, sql } from "drizzle-orm";
 import { getDb } from "../../../../db";
 import { auditLogs, loginAttempts, sessions, users } from "../../../../db/schema";
 import { passwordHash, randomHex, tokenHash } from "../../../auth";
+import { BASE_PATH } from "../../../base-path";
 
 export async function POST(request:Request){
   try{
@@ -25,6 +26,6 @@ export async function POST(request:Request){
       db.insert(auditLogs).values({userId:user.id,username:user.username,action:"成功",entityType:"登录",entityId:ip,summary:"账号登录成功"})
     ]);
     const secure=new URL(request.url).protocol==="https:"?"; Secure":"";
-    return Response.json({user:{id:user.id,username:user.username,name:user.name,role:user.role,mustChangePassword:user.mustChangePassword}},{headers:{"set-cookie":`eap_session=${token}; Path=/; HttpOnly${secure}; SameSite=Lax; Max-Age=604800`}});
+    return Response.json({user:{id:user.id,username:user.username,name:user.name,role:user.role,mustChangePassword:user.mustChangePassword}},{headers:{"set-cookie":`eap_session=${token}; Path=${BASE_PATH || "/"}; HttpOnly${secure}; SameSite=Lax; Max-Age=604800`}});
   }catch(error){return Response.json({error:error instanceof Error?error.message:"登录失败"},{status:500})}
 }

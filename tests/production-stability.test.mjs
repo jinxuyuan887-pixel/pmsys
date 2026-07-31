@@ -58,10 +58,23 @@ test("service record project selection supports fuzzy searching", async () => {
 test("project and service record views filter by project manager", async () => {
   const dashboard = await read("app/ui/DashboardApp.tsx");
   assert.match(dashboard, /const \[managerFilter,setManagerFilter\]=useState\("all"\)/);
-  assert.match(dashboard, /project\.manager===managerFilter/);
+  assert.match(dashboard, /projectHasManager\(project,managerFilter\)/);
   assert.match(dashboard, /全部项目经理/);
   assert.match(dashboard, /managerProjectIds\.has\(record\.projectId\)/);
   assert.match(dashboard, /onManagerFilterChange\(event\.target\.value\);setProjectId\("all"\)/);
+});
+
+test("project managers come from active manager accounts and support multi-select", async () => {
+  const dashboard = await read("app/ui/DashboardApp.tsx");
+  const route = await read("app/api/projects/route.ts");
+  assert.match(dashboard, /account\.role==="项目经理"&&account\.active/);
+  assert.match(dashboard, /name="managerIds"/);
+  assert.match(dashboard, /currentUser\.role==="项目经理"/);
+  assert.match(dashboard, /可多选；项目经理新建时默认选择本人/);
+  assert.match(route, /normalizeProjectManagers/);
+  assert.match(route, /eq\(users\.role,"项目经理"\)/);
+  assert.match(route, /eq\(users\.active,true\)/);
+  assert.match(route, /至少选择一人/);
 });
 
 test("service records expose a read-only detail view with image previews", async () => {
@@ -109,6 +122,25 @@ test("external links support management and strong random tokens", async () => {
   assert.match(route, /randomHex\(24\)/);
   assert.match(route, /export async function PATCH/);
   assert.match(route, /submissionCount/);
+});
+
+test("external link copy supports HTTP deployments and the pmsys base path", async () => {
+  const dashboard = await read("app/ui/DashboardApp.tsx");
+  assert.match(dashboard, /window\.isSecureContext/);
+  assert.match(dashboard, /document\.execCommand\("copy"\)/);
+  assert.match(dashboard, /location\.origin\}\$\{appPath\(`/);
+  assert.doesNotMatch(dashboard, /navigator\.clipboard\?\.writeText/);
+});
+
+test("project reset restores the original seven-item service catalog", async () => {
+  const reset = await read("scripts/reset-projects-and-catalog.sql");
+  for (const service of ["EAP大使培训","心理讲座","心理团辅","线上咨询","线下咨询","驻场咨询","心理测评"]) {
+    assert.match(reset, new RegExp(service));
+  }
+  assert.doesNotMatch(reset, /EAP宣传/);
+  for (const table of ["file_attachments","form_links","service_records","delivery_tasks","weekly_snapshots","project_versions","projects"]) {
+    assert.match(reset, new RegExp(`DELETE FROM ${table}`));
+  }
 });
 
 test("external forms show consultation fields only for consultation services", async () => {

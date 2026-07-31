@@ -2,6 +2,7 @@ import { and, desc, eq, isNull } from "drizzle-orm";
 import { getDb } from "../../../db";
 import { auditLogs, formLinks, projects } from "../../../db/schema";
 import { randomHex, requireApiUser } from "../../auth";
+import { appPath } from "../../base-path";
 
 const allowedTypes=["心理咨询台账","讲座／团辅活动记录","培训活动记录","驻场服务记录","EAP宣传记录"];
 
@@ -20,7 +21,7 @@ export async function POST(request:Request){
     const expiresAt=days>0&&days<=365?new Date(Date.now()+days*86400000).toISOString():null;
     const [link]=await db.insert(formLinks).values({token,projectId,serviceId,formType:String(body.formType),expiresAt,maxSubmissions:max}).returning();
     await db.insert(auditLogs).values({userId:auth.user.id,username:auth.user.username,action:"生成",entityType:"外部填写链接",entityId:String(link.id),summary:`生成外部链接：${project.name}｜${service.name}`});
-    return Response.json({token,path:`/form/${token}`,link},{status:201});
+    return Response.json({token,path:appPath(`/form/${token}`),link},{status:201});
   }catch(error){return Response.json({error:error instanceof Error?error.message:"链接生成失败"},{status:500})}
 }
 

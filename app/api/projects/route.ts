@@ -1,9 +1,9 @@
-import { and, asc, eq, isNull, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { getDb } from "../../../db";
-import { auditLogs, projects, projectVersions, serviceRecords } from "../../../db/schema";
+import { auditLogs, projects, projectVersions, serviceRecords, users } from "../../../db/schema";
 import { requireApiUser } from "../../auth";
 
-type ProjectInput = { id: number; name?: string; _version?: number; [key: string]: unknown };
+type ProjectInput = { id: number; name?: string; manager?:string; managerIds?:number[]; _version?: number; [key: string]: unknown };
 const clean = (project: ProjectInput) => {
   const payload = { ...project };
   delete payload._version;
@@ -23,6 +23,30 @@ function validateProject(project:ProjectInput){
   const start=String(project.start??""),end=String(project.end??"");
   if(start&&end&&start>end)return "项目结束日期不能早于开始日期";
   return null;
+}
+
+async function normalizeProjectManagers(db:Awaited<ReturnType<typeof getDb>>,project:ProjectInput){
+  const submittedIds=Array.isArray(project.managerIds)
+    ? Array.from(new Set(project.managerIds.map(Number).filter(Number.isSafeInteger)))
+    : [];
+  const legacyNames=submittedIds.length===0
+    ? String(project.manager??"").split(/[、,，]/).map(name=>name.trim()).filter(Boolean)
+    : [];
+  const conditions=[eq(users.role,"项目经理"),eq(users.active,true)];
+  const managerRows=submittedIds.length
+    ? await db.select({id:users.id,name:users.name}).from(users).where(and(...conditions,inArray(users.id,submittedIds)))
+    : legacyNames.length
+      ? await db.select({id:users.id,name:users.name}).from(users).where(and(...conditions,inArray(users.name,legacyNames)))
+      : [];
+  const byId=new Map(managerRows.map(manager=>[manager.id,manager]));
+  const byName=new Map(managerRows.map(manager=>[manager.name,manager]));
+  const selected=(submittedIds.length
+    ? submittedIds.map(id=>byId.get(id)).filter(Boolean)
+    : legacyNames.map(name=>byName.get(name)).filter(Boolean)) as Array<{id:number;name:string}>;
+  if(selected.length==0||(submittedIds.length&&selected.length!==submittedIds.length)||(legacyNames.length&&selected.length!==legacyNames.length)){
+    return {error:"请从系统已有的启用项目经理账号中至少选择一人"} as const;
+  }
+  return {project:{...project,managerIds:selected.map(manager=>manager.id),manager:selected.map(manager=>manager.name).join("、")}} as const;
 }
 
 export async function GET(request: Request) {
@@ -55,15 +79,18 @@ export async function POST(request: Request) {
     if (!body.project?.id) return Response.json({ error: "project is required" }, { status: 400 });
     const validation=validateProject(body.project);if(validation)return Response.json({error:validation},{status:400});
     const db = await getDb();
-    const payload = JSON.stringify(clean(body.project));
+    const normalized=await normalizeProjectManagers(db,body.project);
+    if("error" in normalized)return Response.json({error:normalized.error},{status:400});
+    const project=normalized.project;
+    const payload = JSON.stringify(clean(project));
     const [existing] = await db.select({ id: projects.id }).from(projects).where(eq(projects.id, body.project.id)).limit(1);
     if (existing) return Response.json({ error: "项目编号已存在，请刷新后重试" }, { status: 409 });
     await db.batch([
       db.insert(projects).values({ id: body.project.id, payload, version: 1, isDemo:false }),
       db.insert(projectVersions).values({ projectId: body.project.id, version: 1, payload, changedBy: auth.user.username }),
-      db.insert(auditLogs).values({ userId: auth.user.id, username: auth.user.username, action: "创建", entityType: "项目", entityId: String(body.project.id), summary: `创建项目：${body.project.name ?? body.project.id}`, afterPayload: payload }),
+      db.insert(auditLogs).values({ userId: auth.user.id, username: auth.user.username, action: "创建", entityType: "项目", entityId: String(body.project.id), summary: `创建项目：${project.name ?? body.project.id}`, afterPayload: payload }),
     ]);
-    return Response.json({ project: { ...clean(body.project), _version: 1 } }, { status: 201 });
+    return Response.json({ project: { ...clean(project), _version: 1 } }, { status: 201 });
   } catch (error) {
     return Response.json({ error: error instanceof Error ? error.message : "创建项目失败" }, { status: 500 });
   }
@@ -90,14 +117,17 @@ export async function PATCH(request: Request) {
     if (current.version !== body.expectedVersion) {
       return Response.json({ error: "项目已被其他人更新，请刷新后再修改", current: { ...JSON.parse(current.payload), _version: current.version } }, { status: 409 });
     }
-    const payload = JSON.stringify(clean(body.project));
+    const normalized=await normalizeProjectManagers(db,body.project);
+    if("error" in normalized)return Response.json({error:normalized.error},{status:400});
+    const project=normalized.project;
+    const payload = JSON.stringify(clean(project));
     const nextVersion = current.version + 1;
     const updated = await db.update(projects).set({ payload, version: nextVersion, updatedAt: sql`CURRENT_TIMESTAMP` })
       .where(and(eq(projects.id, body.project.id), eq(projects.version, body.expectedVersion))).returning();
     if (!updated.length) return Response.json({ error: "项目已被其他人更新，请刷新后再修改" }, { status: 409 });
     await db.insert(projectVersions).values({ projectId: body.project.id, version: nextVersion, payload, changedBy: auth.user.username });
-    if(body.audit)await db.insert(auditLogs).values({ userId: auth.user.id, username: auth.user.username, action: "修改", entityType: "项目", entityId: String(body.project.id), summary: `手动修改项目：${body.project.name ?? body.project.id}`, beforePayload: current.payload, afterPayload: payload });
-    return Response.json({ project: { ...clean(body.project), _version: nextVersion } });
+    if(body.audit)await db.insert(auditLogs).values({ userId: auth.user.id, username: auth.user.username, action: "修改", entityType: "项目", entityId: String(body.project.id), summary: `手动修改项目：${project.name ?? body.project.id}`, beforePayload: current.payload, afterPayload: payload });
+    return Response.json({ project: { ...clean(project), _version: nextVersion } });
   } catch (error) {
     return Response.json({ error: error instanceof Error ? error.message : "保存项目失败" }, { status: 500 });
   }
