@@ -77,6 +77,16 @@ test("project managers come from active manager accounts and support multi-selec
   assert.match(route, /至少选择一人/);
 });
 
+test("project services capture contract detail without a draft action", async () => {
+  const dashboard = await read("app/ui/DashboardApp.tsx");
+  const route = await read("app/api/projects/route.ts");
+  assert.match(dashboard, /name="contractDetail"/);
+  assert.match(dashboard, /合同详情说明用于区分同一大类下的具体服务细项/);
+  assert.match(dashboard, /s\.contractDetail\|\|"未填写合同详情说明"/);
+  assert.doesNotMatch(dashboard, /保存草稿/);
+  assert.match(route, /合同详情说明不能超过500字/);
+});
+
 test("service records expose a read-only detail view with image previews", async () => {
   const dashboard = await readFile(new URL("../app/ui/DashboardApp.tsx", import.meta.url), "utf8");
   const filesRoute = await readFile(new URL("../app/api/files/route.ts", import.meta.url), "utf8");

@@ -10,7 +10,7 @@ const clean = (project: ProjectInput) => {
   return payload;
 };
 
-type ServiceInput={id:number;name:string;unit:string;quantity:number;unitPrice:number;costPrice?:number;completed?:number};
+type ServiceInput={id:number;name:string;contractDetail?:string;unit:string;quantity:number;unitPrice:number;costPrice?:number;completed?:number};
 function validateProject(project:ProjectInput){
   if(!String(project.name??"").trim())return "请填写项目名称";
   const services=Array.isArray(project.services)?project.services as ServiceInput[]:[];
@@ -19,6 +19,7 @@ function validateProject(project:ProjectInput){
     if(!Number.isFinite(Number(service.quantity))||Number(service.quantity)<=0||Number(service.quantity)>100000)return "服务数量必须大于0且不超过100000";
     if(!Number.isFinite(Number(service.unitPrice))||Number(service.unitPrice)<0||Number(service.unitPrice)>100000000)return "服务单价不符合要求";
     if(!Number.isFinite(Number(service.costPrice??0))||Number(service.costPrice??0)<0)return "成本单价不能为负数";
+    if(String(service.contractDetail??"").length>500)return "合同详情说明不能超过500字";
   }
   const start=String(project.start??""),end=String(project.end??"");
   if(start&&end&&start>end)return "项目结束日期不能早于开始日期";

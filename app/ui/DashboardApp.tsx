@@ -6,6 +6,7 @@ import { appPath } from "../base-path";
 type Service = {
   id: number;
   name: string;
+  contractDetail?: string;
   unit: string;
   quantity: number;
   completed: number;
@@ -282,6 +283,7 @@ export default function DashboardApp({currentUser}:{currentUser:CurrentUser}) {
     const service: Service = {
       id: Date.now(),
       name: String(form.get("name")),
+      contractDetail: String(form.get("contractDetail")).trim(),
       unit: String(form.get("unit")),
       quantity: Number(form.get("quantity")),
       completed: 0,
@@ -412,7 +414,7 @@ export default function DashboardApp({currentUser}:{currentUser:CurrentUser}) {
             <div className="service-table">
               <div className="service-row heading"><span>服务内容</span><span>计量方式</span><span>单价</span><span>合同金额</span><span>执行进度</span><span>操作</span></div>
               {selected.services.map((s)=><div className="service-row" key={s.id}>
-                <span><strong>{s.name}</strong><small>支持自定义字段</small></span><span>{s.completed}/{s.quantity} {s.unit}</span><span>{money(s.unitPrice)}/{s.unit}</span><span>{money(s.unitPrice*s.quantity)}</span>
+                <span><strong>{s.name}</strong><small>{s.contractDetail||"未填写合同详情说明"}</small></span><span>{s.completed}/{s.quantity} {s.unit}</span><span>{money(s.unitPrice)}/{s.unit}</span><span>{money(s.unitPrice*s.quantity)}</span>
                 <span><Progress value={Math.round(s.completed/s.quantity*100)} green/></span>
                 <span>{!selected._archivedAt&&<button onClick={()=>setModal("link")}>生成填写链接</button>}</span>
               </div>)}
@@ -473,7 +475,7 @@ function ProjectForm({editing,catalog,projectManagers,currentUser,onSave}:{editi
         ? [currentUser.id]
         : [];
   const [selectedManagerIds,setSelectedManagerIds]=useState<number[]>(initialManagerIds);
-  const [services,setServices]=useState<Service[]>(()=>editing?.services ?? [{id:Date.now(),name:available[0]?.name??"",unit:available[0]?.defaultUnit??"场",quantity:1,completed:0,unitPrice:0,costPrice:0}]);
+  const [services,setServices]=useState<Service[]>(()=>editing?.services ?? [{id:Date.now(),name:available[0]?.name??"",contractDetail:"",unit:available[0]?.defaultUnit??"场",quantity:1,completed:0,unitPrice:0,costPrice:0}]);
   const serviceTotal=services.reduce((sum,item)=>sum+item.quantity*item.unitPrice,0);
   function updateService(id:number,key:keyof Service,value:string){
     setServices(items=>items.map(item=>item.id===id?{...item,[key]:["quantity","unitPrice","costPrice"].includes(key)?Number(value):value}:item));
@@ -486,10 +488,10 @@ function ProjectForm({editing,catalog,projectManagers,currentUser,onSave}:{editi
       <label>开始日期<input name="start" type="date" required defaultValue={editing?.start}/></label><label>结束日期<input name="end" type="date" required defaultValue={editing?.end}/></label>
       <label>合同文件（选填）<input type="file" accept=".pdf,.doc,.docx"/></label>
       <div className="full service-builder">
-        <div className="builder-title"><span><strong>项目服务内容</strong><small>服务名称从统一目录选择，数量和金额按项目独立设置</small></span><button type="button" onClick={()=>setServices(items=>[...items,{id:Date.now(),name:available[0]?.name??"",unit:available[0]?.defaultUnit??"场",quantity:1,completed:0,unitPrice:0,costPrice:0}])}>＋ 添加服务</button></div>
-        <div className="builder-head"><span>服务内容</span><span>单位</span><span>数量</span><span>销售单价</span><span>成本单价</span><span>金额小计</span><span/></div>
+        <div className="builder-title"><span><strong>项目服务内容</strong><small>服务大类从统一目录选择；合同详情说明用于区分同一大类下的具体服务细项</small></span><button type="button" onClick={()=>setServices(items=>[...items,{id:Date.now(),name:available[0]?.name??"",contractDetail:"",unit:available[0]?.defaultUnit??"场",quantity:1,completed:0,unitPrice:0,costPrice:0}])}>＋ 添加服务</button></div>
+        <div className="builder-head"><span>服务大类／合同详情说明</span><span>单位</span><span>数量</span><span>销售单价</span><span>成本单价</span><span>金额小计</span><span/></div>
         {services.map(item=><div className="builder-row" key={item.id}>
-          <select required value={item.name} onChange={e=>{const template=available.find(x=>x.name===e.target.value);setServices(items=>items.map(x=>x.id===item.id?{...x,name:e.target.value,unit:template?.defaultUnit??x.unit}:x))}}>{available.map(template=><option key={template.id}>{template.name}</option>)}</select>
+          <div className="builder-service"><select required value={item.name} onChange={e=>{const template=available.find(x=>x.name===e.target.value);setServices(items=>items.map(x=>x.id===item.id?{...x,name:e.target.value,unit:template?.defaultUnit??x.unit}:x))}}>{available.map(template=><option key={template.id}>{template.name}</option>)}</select><input required maxLength={500} placeholder="合同详情说明，如：压力管理专题讲座" value={item.contractDetail??""} onChange={e=>updateService(item.id,"contractDetail",e.target.value)}/></div>
           <select value={item.unit} onChange={e=>updateService(item.id,"unit",e.target.value)}><option>场</option><option>人次</option><option>小时</option><option>天</option><option>期</option><option>份</option></select>
           <input type="number" min="1" value={item.quantity} onChange={e=>updateService(item.id,"quantity",e.target.value)}/>
           <input type="number" min="0" value={item.unitPrice} onChange={e=>updateService(item.id,"unitPrice",e.target.value)}/>
@@ -501,12 +503,13 @@ function ProjectForm({editing,catalog,projectManagers,currentUser,onSave}:{editi
         <input type="hidden" name="services" value={JSON.stringify(services)}/>
       </div>
     </div>
-    <div className="modal-actions"><button type="button">保存草稿</button><button className="primary" type="submit" disabled={!selectedManagerIds.length}>{editing?"保存修改":"创建项目"}</button></div>
+    <div className="modal-actions"><button className="primary" type="submit" disabled={!selectedManagerIds.length}>{editing?"保存修改":"创建项目"}</button></div>
   </form>;
 }
 function ServiceForm({catalog,onSave}:{catalog:ServiceTemplate[];onSave:(d:FormData)=>void}) {
   return <form action={onSave}><div className="modal-title"><h2>添加项目服务</h2><p>从服务目录选择名称，数量和单价按当前项目独立设置。</p></div>
-    <div className="form-grid"><label className="full">服务内容<select name="name" required>{catalog.filter(x=>x.enabled).map(item=><option key={item.id}>{item.name}</option>)}</select></label>
+    <div className="form-grid"><label className="full">服务大类<select name="name" required>{catalog.filter(x=>x.enabled).map(item=><option key={item.id}>{item.name}</option>)}</select></label>
+      <label className="full">合同详情说明<input name="contractDetail" required maxLength={500} placeholder="标注合同约定的具体服务细项"/></label>
       <label>计量单位<select name="unit"><option>场</option><option>人次</option><option>小时</option><option>天</option><option>期</option><option>份</option></select></label>
       <label>服务数量<input name="quantity" type="number" min="1" required/></label><label>服务单价（元）<input name="unitPrice" type="number" min="0" required/></label><label>成本单价（元）<input name="costPrice" type="number" min="0"/></label>
       <label>统计方式<select><option>审核通过后自动累计</option><option>手动更新进度</option><option>按完成状态统计</option></select></label>
