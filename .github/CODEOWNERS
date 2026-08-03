@@ -1,0 +1,8 @@
+# Both maintainers review changes to application code by default.
+* @jinxuyuan887-pixel @lanlan940922-ops
+
+# Database and deployment changes always require both maintainers' attention.
+/db/ @jinxuyuan887-pixel @lanlan940922-ops
+/drizzle/ @jinxuyuan887-pixel @lanlan940922-ops
+/deploy/ @jinxuyuan887-pixel @lanlan940922-ops
+/Dockerfile @jinxuyuan887-pixel @lanlan940922-ops

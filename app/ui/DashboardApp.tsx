@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { appPath } from "../base-path";
 
 type Service = {
@@ -38,6 +38,11 @@ type ServiceRecord = {
   costUnitSnapshot?:number|null;costAmountSnapshot?:number|null;profitRateBasisPoints?:number|null;
   payload:{data?:Record<string,unknown>;uploaded?:string[];type?:string};
 };
+type DeliveryTask={
+  id:number;projectId:number;serviceId:number;title:string;description:string;plannedQuantity:number;
+  plannedDate?:string|null;owner?:string|null;status:string;createdAt:string;updatedAt:string;
+  recordIds:number[];records?:ServiceRecord[];
+};
 type CurrentUser={id:number;username:string;name:string;role:string;mustChangePassword:boolean};
 type ProjectManagerAccount={id:number;username:string;name:string;role:string;active:boolean};
 const defaultCatalog:ServiceTemplate[] = [
@@ -53,6 +58,7 @@ const defaultCatalog:ServiceTemplate[] = [
 const nav = [
   ["dashboard", "⌂", "工作台"],
   ["projects", "▣", "项目管理"],
+  ["tasks", "☑", "任务管理"],
   ["records", "▤", "服务记录"],
   ["consultants", "♧", "咨询师归集"],
   ["links", "↗", "填写链接"],
@@ -127,6 +133,7 @@ export default function DashboardApp({currentUser}:{currentUser:CurrentUser}) {
   const [editingRecord,setEditingRecord]=useState<ServiceRecord|null>(null);
   const [viewingRecord,setViewingRecord]=useState<ServiceRecord|null>(null);
   const [reviewingRecord,setReviewingRecord]=useState<ServiceRecord|null>(null);
+  const [taskRecordTarget,setTaskRecordTarget]=useState<DeliveryTask|null>(null);
   const [editing, setEditing] = useState<Project | null>(null);
   const [query, setQuery] = useState("");
   const [managerFilter,setManagerFilter]=useState("all");
@@ -310,9 +317,21 @@ export default function DashboardApp({currentUser}:{currentUser:CurrentUser}) {
     const payload={source:"项目经理填写",projectId,serviceId,recordType:String(form.get("recordType")),provider:String(form.get("provider")),startDate:String(form.get("startDate")),endDate:String(form.get("endDate")),quantity,consultantCostUnit:Number(form.get("consultantCostUnit")),materialCostUnit:Number(form.get("materialCostUnit")),summary:String(form.get("summary")),status:"已完成"};
     const response=await fetch(appPath("/api/records"),{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({type:payload.recordType,data:payload,uploaded})}).catch(()=>null);
     if(!response?.ok){const data=await response?.json().catch(()=>({})) as {error?:string}|undefined;notify(data?.error??"服务记录保存失败，项目进度未变更");return}
+    const result=await response.json() as {record?:ServiceRecord};
+    if(taskRecordTarget&&result.record){
+      const taskResponse=await fetch(appPath("/api/tasks"),{method:"PATCH",headers:{"content-type":"application/json"},body:JSON.stringify({
+        ...taskRecordTarget,recordIds:Array.from(new Set([...taskRecordTarget.recordIds,result.record.id]))
+      })});
+      if(!taskResponse.ok){
+        setModal(null);setTaskRecordTarget(null);
+        await Promise.all([refreshRecords(),refreshProjects()]);
+        notify("服务记录已保存，但关联任务失败，请在任务编辑中手动关联");return
+      }
+    }
     setModal(null);
+    setTaskRecordTarget(null);
     await Promise.all([refreshRecords(),refreshProjects()]);
-    notify("服务记录已保存，项目进度已更新");
+    notify(taskRecordTarget?"服务记录已保存并关联任务":"服务记录已保存，项目进度已更新");
   }
 
   async function saveEditedRecord(form:FormData){
@@ -427,6 +446,7 @@ export default function DashboardApp({currentUser}:{currentUser:CurrentUser}) {
         )}
 
         {page === "records" && !selected && <Records records={records} projects={projects.filter(project=>!project._archivedAt)} managerFilter={managerFilter} onManagerFilterChange={setManagerFilter} refresh={async()=>{await Promise.all([refreshRecords(),refreshProjects()])}} notify={notify} onManagerRecord={()=>setModal("managerRecord")} onLink={()=>setModal("link")} onView={(record)=>{setViewingRecord(record);setModal("viewRecord")}} onReview={(record)=>{setReviewingRecord(record);setModal("reviewRecord")}} onEdit={(record)=>{setEditingRecord(record);setModal("editRecord")}}/>}
+        {page === "tasks" && !selected && <TaskManagement projects={projects.filter(project=>!project._archivedAt)} records={records} currentUser={currentUser} managers={projectManagerAccounts} notify={notify} onAddRecord={task=>{setTaskRecordTarget(task);setModal("managerRecord")}} onReview={record=>{setReviewingRecord(record);setModal("reviewRecord")}} onView={record=>{setViewingRecord(record);setModal("viewRecord")}}/>}
         {page === "consultants" && !selected && <Consultants records={records} projects={projects} onView={(record)=>{setViewingRecord(record);setModal("viewRecord")}}/>}
         {page === "links" && !selected && <ExternalLinks projects={projects} notify={notify} onAdd={()=>setModal("link")}/>}
         {page === "governance" && !selected && <Governance/>}
@@ -440,7 +460,7 @@ export default function DashboardApp({currentUser}:{currentUser:CurrentUser}) {
           {modal === "project" && <ProjectForm editing={editing} catalog={catalog} projectManagers={projectManagerAccounts} currentUser={currentUser} onSave={saveProject}/>}
           {modal === "service" && <ServiceForm catalog={catalog} onSave={saveService}/>}
           {modal === "link" && <LinkDialog projects={projects.filter(project=>!project._archivedAt)} selectedProjectId={selected?.id} notify={notify} close={()=>setModal(null)}/>}
-          {modal === "managerRecord" && <ManagerRecordForm projects={projects.filter(project=>!project._archivedAt)} onSave={saveManagerRecord} close={()=>setModal(null)}/>}
+          {modal === "managerRecord" && <ManagerRecordForm projects={projects.filter(project=>!project._archivedAt)} defaultProjectId={taskRecordTarget?.projectId} defaultServiceId={taskRecordTarget?.serviceId} onSave={saveManagerRecord} close={()=>{setModal(null);setTaskRecordTarget(null)}}/>}
           {modal === "viewRecord" && viewingRecord && <ViewRecordDialog record={viewingRecord} projects={projects} close={()=>{setModal(null);setViewingRecord(null)}}/>}
           {modal === "reviewRecord" && reviewingRecord && <ReviewRecordDialog record={reviewingRecord} projects={projects} notify={notify} close={()=>{setModal(null);setReviewingRecord(null)}} onApproved={async()=>{setModal(null);setReviewingRecord(null);await Promise.all([refreshRecords(),refreshProjects()])}}/>}
           {modal === "editRecord" && editingRecord && <EditRecordForm record={editingRecord} projects={projects.filter(project=>!project._archivedAt)} onSave={saveEditedRecord} close={()=>{setModal(null);setEditingRecord(null)}}/>}
@@ -584,10 +604,10 @@ function ProjectSearchSelect({projects,value,onChange,name,allowAll=false,placeh
   </div>;
 }
 
-function ManagerRecordForm({projects,onSave,close}:{projects:Project[];onSave:(d:FormData)=>void;close:()=>void}) {
-  const [projectId,setProjectId]=useState(projects[0]?.id??0);
+function ManagerRecordForm({projects,defaultProjectId,defaultServiceId,onSave,close}:{projects:Project[];defaultProjectId?:number;defaultServiceId?:number;onSave:(d:FormData)=>void;close:()=>void}) {
+  const [projectId,setProjectId]=useState(defaultProjectId??projects[0]?.id??0);
   const current=projects.find(project=>project.id===projectId);
-  const [serviceId,setServiceId]=useState(current?.services[0]?.id??0);
+  const [serviceId,setServiceId]=useState(defaultServiceId??current?.services[0]?.id??0);
   const [consultantCostUnit,setConsultantCostUnit]=useState("");
   const [materialCostUnit,setMaterialCostUnit]=useState("");
   const selectedService=current?.services.find(service=>service.id===serviceId)??current?.services[0];
@@ -625,6 +645,99 @@ function LinkDialog({projects,selectedProjectId,notify,close}:{projects:Project[
     <div className="modal-actions"><button type="button" onClick={close}>关闭</button>{!link?<button className="primary">生成链接</button>:<button type="button" className="primary" onClick={async()=>notify(await copyText(link)?"填写链接已复制":"复制失败，请手动选择链接复制")}>复制链接</button>}</div>
   </form>;
 }
+
+function TaskManagement({projects,records,currentUser,managers,notify,onAddRecord,onReview,onView}:{
+  projects:Project[];records:ServiceRecord[];currentUser:CurrentUser;managers:ProjectManagerAccount[];
+  notify:(message:string)=>void;onAddRecord:(task:DeliveryTask)=>void;onReview:(record:ServiceRecord)=>void;onView:(record:ServiceRecord)=>void;
+}){
+  const [tasks,setTasks]=useState<DeliveryTask[]>([]);
+  const [status,setStatus]=useState<"all"|"completed"|"incomplete">("all");
+  const [start,setStart]=useState(""),[end,setEnd]=useState("");
+  const [editing,setEditing]=useState<DeliveryTask|null>(null);
+  const [showForm,setShowForm]=useState(false);
+  const recordsSignature=records.map(record=>`${record.id}:${record.status}`).join(",");
+  const load=useCallback(async()=>{
+    const query=new URLSearchParams({status});
+    if(start)query.set("start",start);if(end)query.set("end",end);
+    const response=await fetch(appPath(`/api/tasks?${query}`),{cache:"no-store"});
+    if(response.ok){const data=await response.json() as {tasks?:DeliveryTask[]};setTasks(data.tasks??[])}
+  },[end,start,status]);
+  useEffect(()=>{const timer=window.setTimeout(()=>void load(),0);return()=>window.clearTimeout(timer)},[load,recordsSignature]);
+  const projectFor=(task:DeliveryTask)=>projects.find(project=>project.id===task.projectId);
+  const serviceFor=(task:DeliveryTask)=>projectFor(task)?.services.find(service=>service.id===task.serviceId);
+  const taskRecords=(task:DeliveryTask)=>task.recordIds.map(id=>records.find(record=>record.id===id)).filter((record):record is ServiceRecord=>Boolean(record));
+  async function save(task:Omit<DeliveryTask,"id"|"createdAt"|"updatedAt"|"records"> & {id?:number}){
+    const response=await fetch(appPath("/api/tasks"),{method:task.id?"PATCH":"POST",headers:{"content-type":"application/json"},body:JSON.stringify(task)});
+    const data=await response.json() as {error?:string};
+    if(!response.ok){notify(data.error??"任务保存失败");return}
+    setShowForm(false);setEditing(null);await load();notify(task.id?"任务修改成功":"任务创建成功");
+  }
+  async function remove(task:DeliveryTask){
+    if(!window.confirm(`确认删除任务“${task.title}”吗？服务记录本身不会删除。`))return;
+    const response=await fetch(appPath(`/api/tasks?id=${task.id}`),{method:"DELETE"});
+    if(!response.ok){notify("任务删除失败");return}
+    await load();notify("任务已删除，关联服务记录已保留");
+  }
+  const completed=tasks.filter(task=>task.status==="已完成").length;
+  return <section className="content-card task-management">
+    <div className="section-title"><div><h2>项目经理任务管理</h2><p>任务可关联多条服务记录；独立服务记录填写和审核入口仍然保留</p></div><button className="primary" onClick={()=>{setEditing(null);setShowForm(true)}}>＋ 新增任务</button></div>
+    <div className="task-summary"><div><small>当前列表</small><strong>{tasks.length}</strong></div><div><small>已完成</small><strong>{completed}</strong></div><div><small>未完成</small><strong>{tasks.length-completed}</strong></div><div><small>待审核关联记录</small><strong>{tasks.reduce((sum,task)=>sum+taskRecords(task).filter(record=>record.status==="待审核").length,0)}</strong></div></div>
+    <div className="task-filters">
+      <label>完成状态<select value={status} onChange={event=>setStatus(event.target.value as typeof status)}><option value="all">全部任务</option><option value="incomplete">未完成</option><option value="completed">已完成</option></select></label>
+      <label>计划开始日期<input type="date" value={start} onChange={event=>setStart(event.target.value)}/></label>
+      <label>计划结束日期<input type="date" value={end} onChange={event=>setEnd(event.target.value)}/></label>
+      <button onClick={()=>{setStatus("all");setStart("");setEnd("")}}>重置筛选</button>
+    </div>
+    <div className="task-list">
+      {tasks.map(task=>{
+        const project=projectFor(task),service=serviceFor(task),linked=taskRecords(task),pending=linked.filter(record=>record.status==="待审核");
+        return <article className="task-card" key={task.id}>
+          <div className="task-card-main"><Status value={task.status}/><span><strong>{task.title}</strong><small>{project?.name??"项目已归档"} · {service?.name??"服务不存在"}{service?.contractDetail?` · ${service.contractDetail}`:""}</small></span><time>{task.plannedDate||"未设置日期"}</time></div>
+          {task.description&&<p>{task.description}</p>}
+          <div className="task-meta"><span>负责人<strong>{task.owner||"未分配"}</strong></span><span>计划数量<strong>{task.plannedQuantity} {service?.unit??""}</strong></span><span>关联记录<strong>{linked.length} 条</strong></span><span>交付状态<strong>{linked.filter(record=>record.status==="已完成").length} 已完成 / {pending.length} 待审核</strong></span></div>
+          {linked.length>0&&<div className="task-records">{linked.map(record=><div key={record.id}><span><strong>{record.recordType}</strong><small>{String(record.payload.data?.date??record.createdAt.slice(0,10))} · {String(record.payload.data?.provider??"未填写服务人员")}</small></span><Status value={record.status==="已完成"?"已交付":record.status}/><button onClick={()=>onView(record)}>查看</button>{record.status==="待审核"&&<button className="review-task-record" onClick={()=>onReview(record)}>审核</button>}</div>)}</div>}
+          <div className="task-actions"><button className="primary" onClick={()=>onAddRecord(task)}>＋ 新增服务记录</button><button onClick={()=>{setEditing(task);setShowForm(true)}}>编辑任务</button><button className="danger-text" onClick={()=>remove(task)}>删除任务</button></div>
+        </article>;
+      })}
+      {!tasks.length&&<div className="empty-records"><strong>当前条件下暂无任务</strong><span>可以新建任务，也可以继续在“服务记录”板块直接填写记录。</span></div>}
+    </div>
+    {showForm&&<div className="modal-backdrop" onMouseDown={()=>{setShowForm(false);setEditing(null)}}><div className="modal" onMouseDown={event=>event.stopPropagation()}><button className="close" onClick={()=>{setShowForm(false);setEditing(null)}}>×</button><TaskForm editing={editing} projects={projects} records={records} managers={managers} currentUser={currentUser} onSave={save} close={()=>{setShowForm(false);setEditing(null)}}/></div></div>}
+  </section>;
+}
+
+function TaskForm({editing,projects,records,managers,currentUser,onSave,close}:{
+  editing:DeliveryTask|null;projects:Project[];records:ServiceRecord[];managers:ProjectManagerAccount[];currentUser:CurrentUser;
+  onSave:(task:Omit<DeliveryTask,"id"|"createdAt"|"updatedAt"|"records"> & {id?:number})=>void;close:()=>void;
+}){
+  const [projectId,setProjectId]=useState(editing?.projectId??projects[0]?.id??0);
+  const project=projects.find(item=>item.id===projectId);
+  const [serviceId,setServiceId]=useState(editing?.serviceId??project?.services[0]?.id??0);
+  const [recordIds,setRecordIds]=useState<number[]>(editing?.recordIds??[]);
+  const matchingRecords=records.filter(record=>record.projectId===projectId&&record.serviceId===serviceId);
+  function changeProject(value:number){const next=projects.find(item=>item.id===value);setProjectId(value);setServiceId(next?.services[0]?.id??0);setRecordIds([])}
+  function changeService(value:number){setServiceId(value);setRecordIds([])}
+  function submit(form:FormData){
+    onSave({
+      id:editing?.id,projectId,serviceId,title:String(form.get("title")),description:String(form.get("description")),
+      plannedQuantity:Number(form.get("plannedQuantity")),plannedDate:String(form.get("plannedDate")),owner:String(form.get("owner")),
+      status:String(form.get("status")),recordIds
+    });
+  }
+  return <form action={submit}><div className="modal-title"><h2>{editing?"编辑任务":"新增任务"}</h2><p>任务绑定项目服务，可关联内部填写或外部提交的一条或多条服务记录。</p></div>
+    <div className="form-grid"><label className="full">任务名称<input name="title" required maxLength={100} defaultValue={editing?.title}/></label>
+      <label>所属项目<ProjectSearchSelect projects={projects} value={projectId} onChange={value=>changeProject(Number(value))}/></label>
+      <label>对应服务<select value={serviceId} onChange={event=>changeService(Number(event.target.value))}>{project?.services.map(service=><option value={service.id} key={service.id}>{service.name}{service.contractDetail?`｜${service.contractDetail}`:""}</option>)}</select></label>
+      <label>计划日期<input name="plannedDate" type="date" defaultValue={editing?.plannedDate??""}/></label>
+      <label>计划数量<input name="plannedQuantity" type="number" min="1" defaultValue={editing?.plannedQuantity??1} required/></label>
+      <label>负责人<select name="owner" defaultValue={editing?.owner??currentUser.name}>{managers.map(manager=><option value={manager.name} key={manager.id}>{manager.name}</option>)}</select></label>
+      <label>完成状态<select name="status" defaultValue={editing?.status==="已完成"?"已完成":"未完成"}><option>未完成</option><option>已完成</option></select></label>
+      <label className="full">任务说明<textarea name="description" maxLength={1000} defaultValue={editing?.description} placeholder="填写执行要求、时间安排、交付标准等"/></label>
+      <div className="full task-record-picker"><span>关联服务记录</span><small>未完成任务可暂不关联；标记已完成时至少选择一条记录</small>{matchingRecords.length?<div>{matchingRecords.map(record=><label key={record.id}><input type="checkbox" checked={recordIds.includes(record.id)} onChange={event=>setRecordIds(ids=>event.target.checked?[...ids,record.id]:ids.filter(id=>id!==record.id))}/><span><strong>{record.recordType}</strong><small>{String(record.payload.data?.date??record.createdAt.slice(0,10))} · {String(record.payload.data?.provider??"未填写")} · {record.status}</small></span></label>)}</div>:<em>该项目服务下暂无记录，可先创建任务，之后从任务行直接新增服务记录。</em>}</div>
+    </div>
+    <div className="modal-actions"><button type="button" onClick={close}>取消</button><button className="primary">{editing?"保存修改":"创建任务"}</button></div>
+  </form>;
+}
+
 function Records({records,projects,managerFilter,onManagerFilterChange,refresh,notify,onManagerRecord,onLink,onView,onReview,onEdit}:{records:ServiceRecord[];projects:Project[];managerFilter:string;onManagerFilterChange:(manager:string)=>void;refresh:()=>Promise<void>;notify:(s:string)=>void;onManagerRecord:()=>void;onLink:()=>void;onView:(record:ServiceRecord)=>void;onReview:(record:ServiceRecord)=>void;onEdit:(record:ServiceRecord)=>void}) {
   const [period,setPeriod]=useState<"week"|"month"|"all"|"custom">("month");
   const [recordStatus,setRecordStatus]=useState<"all"|"delivered"|"pending">("all");

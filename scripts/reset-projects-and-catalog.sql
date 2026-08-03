@@ -3,6 +3,7 @@ BEGIN IMMEDIATE;
 
 DELETE FROM file_attachments;
 DELETE FROM form_links;
+DELETE FROM delivery_task_records;
 DELETE FROM service_records;
 DELETE FROM delivery_tasks;
 DELETE FROM weekly_snapshots;

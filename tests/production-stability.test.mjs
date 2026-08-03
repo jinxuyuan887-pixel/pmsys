@@ -87,6 +87,24 @@ test("project services capture contract detail without a draft action", async ()
   assert.match(route, /合同详情说明不能超过500字/);
 });
 
+test("task management supports CRUD filters and service record links", async () => {
+  const dashboard = await read("app/ui/DashboardApp.tsx");
+  const route = await read("app/api/tasks/route.ts");
+  const migration = await read("drizzle/0011_task_record_links.sql");
+  assert.match(dashboard, /\["tasks", "☑", "任务管理"\]/);
+  assert.match(dashboard, /function TaskManagement/);
+  assert.match(dashboard, /新增服务记录/);
+  assert.match(dashboard, /record\.status==="待审核"/);
+  assert.match(dashboard, /审核/);
+  assert.match(route, /export async function GET/);
+  assert.match(route, /export async function POST/);
+  assert.match(route, /export async function PATCH/);
+  assert.match(route, /export async function DELETE/);
+  assert.match(route, /已完成任务必须至少关联一条服务记录/);
+  assert.match(route, /只能关联同一项目、同一服务下的有效服务记录/);
+  assert.match(migration, /delivery_task_records/);
+});
+
 test("service records expose a read-only detail view with image previews", async () => {
   const dashboard = await readFile(new URL("../app/ui/DashboardApp.tsx", import.meta.url), "utf8");
   const filesRoute = await readFile(new URL("../app/api/files/route.ts", import.meta.url), "utf8");

@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
+import { integer, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
 
 export const projects = sqliteTable("projects", {
   id: integer("id").primaryKey(),
@@ -84,6 +84,7 @@ export const deliveryTasks = sqliteTable("delivery_tasks", {
   projectId: integer("project_id").notNull(),
   serviceId: integer("service_id").notNull(),
   title: text("title").notNull(),
+  description: text("description").notNull().default(""),
   plannedQuantity: integer("planned_quantity").notNull().default(1),
   plannedDate: text("planned_date"),
   owner: text("owner"),
@@ -91,6 +92,15 @@ export const deliveryTasks = sqliteTable("delivery_tasks", {
   createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
   updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
 });
+
+export const deliveryTaskRecords = sqliteTable("delivery_task_records", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  taskId: integer("task_id").notNull(),
+  recordId: integer("record_id").notNull(),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+}, table => ({
+  taskRecordUnique: uniqueIndex("delivery_task_records_unique").on(table.taskId,table.recordId),
+}));
 
 export const weeklySnapshots = sqliteTable("weekly_snapshots", {
   id: integer("id").primaryKey({ autoIncrement: true }),
