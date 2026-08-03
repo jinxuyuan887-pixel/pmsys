@@ -44,3 +44,13 @@ npm test
 ## 安全说明
 
 仓库不包含线上数据库、用户上传附件、会话数据或运行环境密钥。首次正式部署后应立即设置高强度管理员密码，并通过环境或平台密钥管理服务保存敏感配置。
+
+## 两人协作
+
+`jinxuyuan887-pixel/pmsys` 的 `main` 是唯一线上发布基线。两位贡献者均从最新 `main` 创建个人功能分支，通过 Pull Request 合并，不直接在 `main` 上开发或强制推送。
+
+- 金旭媛：`jin/<类型>-<简述>`
+- lanlan：`lanlan/<类型>-<简述>`
+- 类型使用 `feature`、`fix`、`docs`、`refactor` 或 `hotfix`
+
+完整的开发、审核、数据库迁移和发布规则见 [CONTRIBUTING.md](CONTRIBUTING.md)。
