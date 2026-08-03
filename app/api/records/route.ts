@@ -4,6 +4,15 @@ import { auditLogs, fileAttachments, formLinks, projects, serviceRecords } from 
 import { requireApiUser } from "../../auth";
 
 const allowedTypes=["讲座／团辅活动记录","心理咨询台账","培训活动记录","驻场服务记录","EAP宣传记录","心理测评记录"];
+const consultationServices=new Set(["线上咨询","线下咨询","驻场咨询"]);
+const recordTypeForService=(serviceName:string,fallback:string)=>{
+  if(consultationServices.has(serviceName))return "心理咨询台账";
+  if(["心理讲座","心理团辅"].includes(serviceName))return "讲座／团辅活动记录";
+  if(serviceName==="EAP大使培训")return "培训活动记录";
+  if(serviceName==="EAP宣传")return "EAP宣传记录";
+  if(serviceName==="心理测评")return "心理测评记录";
+  return fallback;
+};
 const quantityOf=(data?:Record<string,unknown>)=>Number(data?.quantity??1);
 const hasCost=(data?:Record<string,unknown>)=>data?.costUnit!==undefined&&data?.costUnit!==null&&data?.costUnit!=="";
 const costOf=(data?:Record<string,unknown>)=>Number(data?.costUnit);
@@ -16,6 +25,14 @@ function validate(type:string,data?:Record<string,unknown>){
   if(!validDate(dateOf(data)))return "请选择正确的服务日期";
   if(!String(data?.provider??"").trim())return "请填写服务人员";
   if(!String(data?.summary??"").trim())return "请填写服务执行情况";
+  return null;
+}
+function validateExternalService(serviceName:string,data?:Record<string,unknown>){
+  if(!consultationServices.has(serviceName))return null;
+  if(!["线上咨询","线下咨询","驻场咨询"].includes(String(data?.method??"")))return "请选择正确的咨询方式";
+  const duration=Number(data?.duration);
+  if(!Number.isFinite(duration)||duration<=0||duration>1440)return "咨询时长必须大于0且不超过1440分钟";
+  if(!["无风险","需要跟进","重点关注"].includes(String(data?.risk??"")))return "请选择风险情况";
   return null;
 }
 async function projectService(projectId:number,serviceId:number){
@@ -70,8 +87,10 @@ export async function POST(request:Request){
       reservedToken=body.token;projectId=link.projectId;serviceId=link.serviceId;type=link.formType;
       body.data={...body.data,projectId,serviceId,source:"外部链接填写"};
     }
-    const validation=validate(type,body.data);if(validation)throw new Error(validation);
     const target=await projectService(projectId,serviceId);if(!target)throw new Error("项目或服务内容不存在，可能已归档");
+    if(body.token)type=recordTypeForService(target.service.name,type);
+    const validation=validate(type,body.data);if(validation)throw new Error(validation);
+    if(body.token){const externalValidation=validateExternalService(target.service.name,body.data);if(externalValidation)throw new Error(externalValidation)}
     const status=body.token?"待审核":"已完成";
     const quantity=quantityOf(body.data);
     const unitPrice=status==="已完成"?Number(target.service.unitPrice)||0:null;
