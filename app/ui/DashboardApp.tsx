@@ -89,6 +89,10 @@ function projectHasManager(project:Project,manager:string){
 function money(value: number) {
   return `¥${value.toLocaleString("zh-CN")}`;
 }
+const recordStartDate=(data?:Record<string,unknown>)=>String(data?.startDate??data?.date??"");
+const recordEndDate=(data?:Record<string,unknown>)=>String(data?.endDate??data?.startDate??data?.date??"");
+const consultantCost=(record:ServiceRecord)=>Number(record.payload.data?.consultantCostUnit??record.payload.data?.costUnit??record.costUnitSnapshot??0);
+const materialCost=(record:ServiceRecord)=>Number(record.payload.data?.materialCostUnit??0);
 
 async function copyText(text:string){
   try{
@@ -303,7 +307,7 @@ export default function DashboardApp({currentUser}:{currentUser:CurrentUser}) {
     for(const file of form.getAll("files")){
       if(file instanceof File&&file.size>0){const upload=new FormData();upload.append("file",file);const response=await fetch(appPath("/api/upload"),{method:"POST",body:upload});if(response.ok){const data=await response.json();uploaded.push(data.key)}}
     }
-    const payload={source:"项目经理填写",projectId,serviceId,recordType:String(form.get("recordType")),provider:String(form.get("provider")),date:String(form.get("date")),quantity,costUnit:Number(form.get("costUnit")),summary:String(form.get("summary")),status:"已完成"};
+    const payload={source:"项目经理填写",projectId,serviceId,recordType:String(form.get("recordType")),provider:String(form.get("provider")),startDate:String(form.get("startDate")),endDate:String(form.get("endDate")),quantity,consultantCostUnit:Number(form.get("consultantCostUnit")),materialCostUnit:Number(form.get("materialCostUnit")),summary:String(form.get("summary")),status:"已完成"};
     const response=await fetch(appPath("/api/records"),{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({type:payload.recordType,data:payload,uploaded})}).catch(()=>null);
     if(!response?.ok){const data=await response?.json().catch(()=>({})) as {error?:string}|undefined;notify(data?.error??"服务记录保存失败，项目进度未变更");return}
     setModal(null);
@@ -315,8 +319,8 @@ export default function DashboardApp({currentUser}:{currentUser:CurrentUser}) {
     if(!editingRecord)return;
     const projectId=Number(form.get("projectId")),serviceId=Number(form.get("serviceId")),quantity=Number(form.get("quantity"))||1;
     const oldQuantity=Number(editingRecord.payload.data?.quantity??1),wasCompleted=editingRecord.status==="已完成";
-    const costValue=form.get("costUnit");
-    const data={...editingRecord.payload.data,projectId,serviceId,recordType:String(form.get("recordType")),provider:String(form.get("provider")),date:String(form.get("date")),quantity,...(costValue!==null&&String(costValue)!==""?{costUnit:Number(costValue)}:{}),summary:String(form.get("summary"))};
+    const consultantCostValue=form.get("consultantCostUnit"),materialCostValue=form.get("materialCostUnit");
+    const data={...editingRecord.payload.data,projectId,serviceId,recordType:String(form.get("recordType")),provider:String(form.get("provider")),startDate:String(form.get("startDate")),endDate:String(form.get("endDate")),quantity,...(consultantCostValue!==null&&String(consultantCostValue)!==""?{consultantCostUnit:Number(consultantCostValue)}:{}),...(materialCostValue!==null&&String(materialCostValue)!==""?{materialCostUnit:Number(materialCostValue)}:{}),summary:String(form.get("summary"))};
     const response=await fetch(appPath("/api/records"),{method:"PATCH",headers:{"content-type":"application/json"},body:JSON.stringify({id:editingRecord.id,type:String(form.get("recordType")),data})});
     if(!response.ok){notify("记录修改失败，请重试");return}
     void oldQuantity;void wasCompleted;
@@ -494,8 +498,8 @@ function ProjectForm({editing,catalog,projectManagers,currentUser,onSave}:{editi
           <div className="builder-service"><select required value={item.name} onChange={e=>{const template=available.find(x=>x.name===e.target.value);setServices(items=>items.map(x=>x.id===item.id?{...x,name:e.target.value,unit:template?.defaultUnit??x.unit}:x))}}>{available.map(template=><option key={template.id}>{template.name}</option>)}</select><input required maxLength={500} placeholder="合同详情说明，如：压力管理专题讲座" value={item.contractDetail??""} onChange={e=>updateService(item.id,"contractDetail",e.target.value)}/></div>
           <select value={item.unit} onChange={e=>updateService(item.id,"unit",e.target.value)}><option>场</option><option>人次</option><option>小时</option><option>天</option><option>期</option><option>份</option></select>
           <input type="number" min="1" value={item.quantity} onChange={e=>updateService(item.id,"quantity",e.target.value)}/>
-          <input type="number" min="0" value={item.unitPrice} onChange={e=>updateService(item.id,"unitPrice",e.target.value)}/>
-          <input type="number" min="0" value={item.costPrice??0} onChange={e=>updateService(item.id,"costPrice",e.target.value)}/>
+          <input type="number" min="0" placeholder="填写销售单价" value={item.unitPrice===0?"":item.unitPrice} onChange={e=>updateService(item.id,"unitPrice",e.target.value)}/>
+          <input type="number" min="0" placeholder="填写成本单价" value={(item.costPrice??0)===0?"":item.costPrice} onChange={e=>updateService(item.id,"costPrice",e.target.value)}/>
           <strong>{money(item.quantity*item.unitPrice)}</strong>
           <button type="button" disabled={services.length===1} onClick={()=>setServices(items=>items.filter(x=>x.id!==item.id))}>×</button>
         </div>)}
@@ -511,7 +515,7 @@ function ServiceForm({catalog,onSave}:{catalog:ServiceTemplate[];onSave:(d:FormD
     <div className="form-grid"><label className="full">服务大类<select name="name" required>{catalog.filter(x=>x.enabled).map(item=><option key={item.id}>{item.name}</option>)}</select></label>
       <label className="full">合同详情说明<input name="contractDetail" required maxLength={500} placeholder="标注合同约定的具体服务细项"/></label>
       <label>计量单位<select name="unit"><option>场</option><option>人次</option><option>小时</option><option>天</option><option>期</option><option>份</option></select></label>
-      <label>服务数量<input name="quantity" type="number" min="1" required/></label><label>服务单价（元）<input name="unitPrice" type="number" min="0" required/></label><label>成本单价（元）<input name="costPrice" type="number" min="0"/></label>
+      <label>服务数量<input name="quantity" type="number" min="1" required/></label><label>服务单价（元）<input name="unitPrice" type="number" min="0" required placeholder="填写销售单价"/></label><label>成本单价（元）<input name="costPrice" type="number" min="0" placeholder="填写成本单价"/></label>
       <label>统计方式<select><option>审核通过后自动累计</option><option>手动更新进度</option><option>按完成状态统计</option></select></label>
       <label className="full">自定义字段<div className="custom-field-row"><input placeholder="字段名称"/><select><option>文本</option><option>数字</option><option>日期</option><option>金额</option><option>文件</option></select><button type="button">＋ 添加字段</button></div></label></div>
     <div className="modal-actions"><button type="button">取消</button><button className="primary" type="submit">确认添加</button></div>
@@ -584,17 +588,20 @@ function ManagerRecordForm({projects,onSave,close}:{projects:Project[];onSave:(d
   const [projectId,setProjectId]=useState(projects[0]?.id??0);
   const current=projects.find(project=>project.id===projectId);
   const [serviceId,setServiceId]=useState(current?.services[0]?.id??0);
-  const [costUnit,setCostUnit]=useState("");
+  const [consultantCostUnit,setConsultantCostUnit]=useState("");
+  const [materialCostUnit,setMaterialCostUnit]=useState("");
   const selectedService=current?.services.find(service=>service.id===serviceId)??current?.services[0];
-  const profitRate=selectedService&&selectedService.unitPrice>0&&costUnit!==""?(selectedService.unitPrice-Number(costUnit))/selectedService.unitPrice*100:null;
+  const totalCost=consultantCostUnit!==""&&materialCostUnit!==""?Number(consultantCostUnit)+Number(materialCostUnit):null;
+  const profitRate=selectedService&&selectedService.unitPrice>0&&totalCost!==null?(selectedService.unitPrice-totalCost)/selectedService.unitPrice*100:null;
   return <form action={onSave}><div className="modal-title"><h2>项目经理填写服务记录</h2><p>填写成本后保存，系统自动计算本条记录利润率并计入项目汇总。</p></div>
     <div className="record-source"><span>填写身份</span><strong>项目经理 · 当前登录账号</strong></div>
-    <div className="form-grid"><label>所属项目<ProjectSearchSelect name="projectId" projects={projects} value={projectId} onChange={value=>{const id=Number(value),project=projects.find(item=>item.id===id);setProjectId(id);setServiceId(project?.services[0]?.id??0);setCostUnit("")}}/></label>
-      <label>服务内容<select name="serviceId" value={serviceId} onChange={e=>{setServiceId(Number(e.target.value));setCostUnit("")}}>{current?.services.map(service=><option value={service.id} key={service.id}>{service.name}（剩余 {Math.max(0,service.quantity-service.completed)} {service.unit}）</option>)}</select></label>
-      <label>记录类型<select name="recordType"><option>讲座／团辅活动记录</option><option>心理咨询台账</option><option>培训活动记录</option><option>驻场服务记录</option><option>EAP宣传记录</option></select></label>
+    <div className="form-grid"><label>所属项目<ProjectSearchSelect name="projectId" projects={projects} value={projectId} onChange={value=>{const id=Number(value),project=projects.find(item=>item.id===id);setProjectId(id);setServiceId(project?.services[0]?.id??0);setConsultantCostUnit("");setMaterialCostUnit("")}}/></label>
+      <label>服务内容<select name="serviceId" value={serviceId} onChange={e=>{setServiceId(Number(e.target.value));setConsultantCostUnit("");setMaterialCostUnit("")}}>{current?.services.map(service=><option value={service.id} key={service.id}>{service.name}（剩余 {Math.max(0,service.quantity-service.completed)} {service.unit}）</option>)}</select></label>
+      <label>记录类型<select name="recordType"><option>讲座／团辅活动记录</option><option>心理咨询台账</option><option>培训活动记录</option><option>驻场服务记录</option><option>EAP宣传记录</option><option>心理测评记录</option></select></label>
       <label>服务人员<input name="provider" required placeholder="讲师、咨询师或项目经理"/></label>
-      <label>服务日期<input name="date" type="date" required/></label><label>本次完成数量<input name="quantity" type="number" min="1" defaultValue="1" required/></label>
-      <label>本次成本单价（元）<input name="costUnit" type="number" min="0" step="0.01" value={costUnit} onChange={e=>setCostUnit(e.target.value)} required placeholder="必填"/></label>
+      <label>服务开始日期<input name="startDate" type="date" required/></label><label>服务结束日期<input name="endDate" type="date" required/></label><label>本次完成数量<input name="quantity" type="number" min="1" defaultValue="1" required/></label>
+      <label>咨询师成本单价（元）<input name="consultantCostUnit" type="number" min="0" step="0.01" value={consultantCostUnit} onChange={e=>setConsultantCostUnit(e.target.value)} required placeholder="必填"/></label>
+      <label>物料成本单价（元）<input name="materialCostUnit" type="number" min="0" step="0.01" value={materialCostUnit} onChange={e=>setMaterialCostUnit(e.target.value)} required placeholder="无物料成本请填0"/></label>
       <div className="profit-preview"><small>服务单价</small><strong>{money(selectedService?.unitPrice??0)}</strong><small>单条利润率</small><strong className={profitRate!==null&&profitRate<0?"negative-profit":""}>{profitRate===null?"填写成本后计算":`${profitRate.toFixed(1)}%`}</strong></div>
       <label className="full">服务执行情况<textarea name="summary" required placeholder="填写活动主题、参与人数、咨询时长、执行效果等"/></label>
       <label className="full">现场图片、课件及其他资料<input name="files" type="file" multiple accept=".jpg,.jpeg,.png,.pdf,.ppt,.pptx,.doc,.docx,.xls,.xlsx"/></label></div>
@@ -612,7 +619,7 @@ function LinkDialog({projects,selectedProjectId,notify,close}:{projects:Project[
   return <form action={generate}><div className="modal-title"><h2>生成项目专属填写链接</h2><p>先绑定项目和服务。外部人员无需选择项目，提交后自动归集并进入待审核。</p></div>
     {!link?<div className="form-grid"><label className="full">对应项目<ProjectSearchSelect projects={projects} value={projectId} onChange={value=>setProjectId(Number(value))}/></label>
       <label className="full">对应服务内容<select name="serviceId" key={projectId} required>{current?.services.map(service=><option value={service.id} key={service.id}>{service.name}（{service.unit}）</option>)}</select></label>
-      <label>填写表单<select name="formType"><option>心理咨询台账</option><option>讲座／团辅活动记录</option><option>培训活动记录</option><option>驻场服务记录</option><option>EAP宣传记录</option></select></label><label>链接有效期<select name="expiresInDays"><option value="7">7天</option><option value="30">30天</option><option value="">永久有效</option></select></label>
+      <label>填写表单<select name="formType"><option>心理咨询台账</option><option>讲座／团辅活动记录</option><option>培训活动记录</option><option>驻场服务记录</option><option>EAP宣传记录</option><option>心理测评记录</option></select></label><label>链接有效期<select name="expiresInDays"><option value="7">7天</option><option value="30">30天</option><option value="">永久有效</option></select></label>
       <label className="full">允许提交次数<select name="maxSubmissions"><option value="1">仅一次</option><option value="9999">可重复提交</option></select></label></div>:
       <div className="generated-link"><span>✓</span><h3>项目专属链接已生成</h3><p>{link}</p><small>外部页面不显示项目金额，记录将自动归集至已绑定项目</small></div>}
     <div className="modal-actions"><button type="button" onClick={close}>关闭</button>{!link?<button className="primary">生成链接</button>:<button type="button" className="primary" onClick={async()=>notify(await copyText(link)?"填写链接已复制":"复制失败，请手动选择链接复制")}>复制链接</button>}</div>
@@ -624,7 +631,8 @@ function Records({records,projects,managerFilter,onManagerFilterChange,refresh,n
   const [projectId,setProjectId]=useState<"all"|number>("all");
   const [start,setStart]=useState(""),[end,setEnd]=useState("");
   const [deletingId,setDeletingId]=useState<number|null>(null);
-  const recordDate=(record:ServiceRecord)=>new Date(String(record.payload.data?.date??record.createdAt));
+  const recordDate=(record:ServiceRecord)=>new Date(recordStartDate(record.payload.data)||record.createdAt);
+  const recordDateRange=(record:ServiceRecord)=>{const data=record.payload.data,start=recordStartDate(data),end=recordEndDate(data);return start&&end&&start!==end?`${new Date(start).toLocaleDateString("zh-CN")} 至 ${new Date(end).toLocaleDateString("zh-CN")}`:new Date(start||record.createdAt).toLocaleDateString("zh-CN")};
   const today=new Date();today.setHours(23,59,59,999);
   const weekStart=new Date(today);weekStart.setDate(today.getDate()-((today.getDay()+6)%7));weekStart.setHours(0,0,0,0);
   const monthStart=new Date(today.getFullYear(),today.getMonth(),1);
@@ -684,7 +692,7 @@ function Records({records,projects,managerFilter,onManagerFilterChange,refresh,n
     <div className="records-table"><div className="records-row heading"><span>执行时间</span><span>项目／服务</span><span>服务人员</span><span>完成数量</span><span>交付金额</span><span>成本／利润率</span><span>资料</span><span>状态／时间</span><span>操作</span></div>
       {filtered.length===0?<div className="empty-records"><strong>当前时间范围暂无服务记录</strong><span>可切换本周、本月、全部或自定义日期查看</span></div>:filtered.map(record=>{
         const data=record.payload.data??{},amount=recordAmount(record),service=serviceFor(record);
-        return <div className="records-row" key={record.id}><span>{recordDate(record).toLocaleDateString("zh-CN")}</span><span>{recordLabel(record)}</span><span>{String(data.provider??"未填写")}</span><span>{Number(data.quantity??1)} {service?.unit??"次"}</span><span className="amount-cell">{amount===null?"审核后冻结":money(amount)}</span><span className="profit-cell">{record.status==="已完成"?(record.costAmountSnapshot===null||record.costAmountSnapshot===undefined?<><strong>待补成本</strong><small>飞书历史数据</small></>:<><strong>{money(record.costAmountSnapshot)}</strong><small className={(record.profitRateBasisPoints??0)<0?"negative-profit":""}>{record.profitRateBasisPoints===null||record.profitRateBasisPoints===undefined?"—":`${(record.profitRateBasisPoints/100).toFixed(1)}%`}</small></>):<small>审核时填写</small>}</span><Attachments recordId={record.id}/><span className="record-time"><Status value={record.status==="已完成"?"已交付":record.status}/><small>{record.status==="已完成"?"审核":"提交/修改"} {recordTimestamp(record)}</small></span><span className="row-actions"><button onClick={()=>onView(record)}>查看</button>{record.status==="待审核"&&<button onClick={()=>onReview(record)}>审核</button>}<button onClick={()=>onEdit(record)}>修改</button><button className="danger-action" disabled={deletingId===record.id} onClick={()=>remove(record)}>{deletingId===record.id?"作废中…":"作废"}</button></span></div>
+        return <div className="records-row" key={record.id}><span>{recordDateRange(record)}</span><span>{recordLabel(record)}</span><span>{String(data.provider??"未填写")}</span><span>{Number(data.quantity??1)} {service?.unit??"次"}</span><span className="amount-cell">{amount===null?"审核后冻结":money(amount)}</span><span className="profit-cell">{record.status==="已完成"?(record.costAmountSnapshot===null||record.costAmountSnapshot===undefined?<><strong>待补成本</strong><small>飞书历史数据</small></>:<><strong>{money(record.costAmountSnapshot)}</strong><small className={(record.profitRateBasisPoints??0)<0?"negative-profit":""}>{record.profitRateBasisPoints===null||record.profitRateBasisPoints===undefined?"—":`${(record.profitRateBasisPoints/100).toFixed(1)}%`}</small></>):<small>审核时填写</small>}</span><Attachments recordId={record.id}/><span className="record-time"><Status value={record.status==="已完成"?"已交付":record.status}/><small>{record.status==="已完成"?"审核":"提交/修改"} {recordTimestamp(record)}</small></span><span className="row-actions"><button onClick={()=>onView(record)}>查看</button>{record.status==="待审核"&&<button onClick={()=>onReview(record)}>审核</button>}<button onClick={()=>onEdit(record)}>修改</button><button className="danger-action" disabled={deletingId===record.id} onClick={()=>remove(record)}>{deletingId===record.id?"作废中…":"作废"}</button></span></div>
       })}
     </div>
   </section>;
@@ -697,9 +705,10 @@ function Consultants({records,projects,onView}:{records:ServiceRecord[];projects
   const [query,setQuery]=useState("");
   const visibleConsultants=consultants.filter(name=>name.toLowerCase().includes(query.trim().toLowerCase()));
   const filtered=approved.filter(record=>consultant==="all"||String(record.payload.data?.provider).trim()===consultant)
-    .sort((a,b)=>new Date(String(b.payload.data?.date??b.createdAt)).getTime()-new Date(String(a.payload.data?.date??a.createdAt)).getTime()||b.id-a.id);
+    .sort((a,b)=>new Date(recordStartDate(b.payload.data)||b.createdAt).getTime()-new Date(recordStartDate(a.payload.data)||a.createdAt).getTime()||b.id-a.id);
   const totalQuantity=filtered.reduce((sum,record)=>sum+Number(record.payload.data?.quantity??1),0);
-  const totalCost=filtered.reduce((sum,record)=>sum+(record.costAmountSnapshot??0),0);
+  const totalConsultantCost=filtered.reduce((sum,record)=>sum+consultantCost(record)*Number(record.payload.data?.quantity??1),0);
+  const totalMaterialCost=filtered.reduce((sum,record)=>sum+materialCost(record)*Number(record.payload.data?.quantity??1),0);
   const servicesFor=(record:ServiceRecord)=>{
     const project=projects.find(item=>item.id===record.projectId);
     return {project,service:project?.services.find(item=>item.id===record.serviceId)};
@@ -707,20 +716,20 @@ function Consultants({records,projects,onView}:{records:ServiceRecord[];projects
   const priceGroups=Array.from(filtered.reduce((groups,record)=>{
     const {service}=servicesFor(record);
     const provider=String(record.payload.data?.provider).trim();
-    const price=record.costUnitSnapshot??0;
-    const key=`${provider}\u0000${service?.name??record.recordType}\u0000${price}`;
-    const current=groups.get(key)??{provider,serviceName:service?.name??record.recordType,unit:service?.unit??"次",price,quantity:0,count:0,total:0};
+    const consultantPrice=consultantCost(record),materialPrice=materialCost(record),price=consultantPrice+materialPrice;
+    const key=`${provider}\u0000${service?.name??record.recordType}\u0000${consultantPrice}\u0000${materialPrice}`;
+    const current=groups.get(key)??{provider,serviceName:service?.name??record.recordType,unit:service?.unit??"次",consultantPrice,materialPrice,price,quantity:0,count:0,total:0};
     current.quantity+=Number(record.payload.data?.quantity??1);current.count+=1;current.total+=record.costAmountSnapshot??0;
     groups.set(key,current);return groups;
-  },new Map<string,{provider:string;serviceName:string;unit:string;price:number;quantity:number;count:number;total:number}>()).values())
+  },new Map<string,{provider:string;serviceName:string;unit:string;consultantPrice:number;materialPrice:number;price:number;quantity:number;count:number;total:number}>()).values())
     .sort((a,b)=>a.provider.localeCompare(b.provider,"zh-CN")||a.serviceName.localeCompare(b.serviceName,"zh-CN")||b.price-a.price);
   return <section className="content-card consultant-page">
-    <div className="section-title"><div><h2>咨询师归集</h2><p>仅统计已审核交付记录；服务价格取项目经理审核时确认的成本单价</p></div></div>
+    <div className="section-title"><div><h2>咨询师归集</h2><p>仅统计已审核交付记录；咨询师成本与物料成本分别归集展示</p></div></div>
     <div className="consultant-summary">
       <div><small>已归集咨询师</small><strong>{consultant==="all"?consultants.length:filtered.length?1:0} 人</strong></div>
-      <div><small>已审核服务记录</small><strong>{filtered.length} 条</strong></div>
       <div><small>累计服务数量</small><strong>{totalQuantity.toLocaleString("zh-CN")}</strong></div>
-      <div><small>累计服务成本</small><strong>{money(totalCost)}</strong></div>
+      <div><small>累计咨询师成本</small><strong>{money(totalConsultantCost)}</strong></div>
+      <div><small>累计物料成本</small><strong>{money(totalMaterialCost)}</strong></div>
     </div>
     <div className="consultant-filter">
       <label><span>搜索咨询师</span><input value={query} onChange={event=>setQuery(event.target.value)} placeholder="输入姓名模糊搜索"/></label>
@@ -729,16 +738,17 @@ function Consultants({records,projects,onView}:{records:ServiceRecord[];projects
     </div>
     <div className="consultant-section-title"><div><h3>服务价格汇总</h3><p>同一咨询师的不同服务、不同审核价格分别归集</p></div><span>{priceGroups.length} 个价格项</span></div>
     <div className="consultant-price-table">
-      <div className="consultant-price-row heading"><span>咨询师</span><span>服务内容</span><span>服务价格</span><span>服务数量</span><span>记录数</span><span>累计成本</span></div>
-      {priceGroups.map(group=><div className="consultant-price-row" key={`${group.provider}-${group.serviceName}-${group.price}`}><strong>{group.provider}</strong><span>{group.serviceName}</span><span className="consultant-price">{money(group.price)} / {group.unit}</span><span>{group.quantity} {group.unit}</span><span>{group.count} 条</span><strong>{money(group.total)}</strong></div>)}
+      <div className="consultant-price-row heading"><span>咨询师</span><span>服务内容</span><span>咨询师成本</span><span>物料成本</span><span>服务数量</span><span>记录数</span><span>累计总成本</span></div>
+      {priceGroups.map(group=><div className="consultant-price-row" key={`${group.provider}-${group.serviceName}-${group.consultantPrice}-${group.materialPrice}`}><strong>{group.provider}</strong><span>{group.serviceName}</span><span className="consultant-price">{money(group.consultantPrice)} / {group.unit}</span><span>{money(group.materialPrice)} / {group.unit}</span><span>{group.quantity} {group.unit}</span><span>{group.count} 条</span><strong>{money(group.total)}</strong></div>)}
       {!priceGroups.length&&<div className="empty-records"><strong>暂无符合条件的已审核记录</strong><span>审核服务记录并填写成本后，将自动归集到这里</span></div>}
     </div>
     <div className="consultant-section-title detail-title"><div><h3>服务明细</h3><p>数据与服务记录同步，按执行时间从近到远排列</p></div><span>{filtered.length} 条</span></div>
     <div className="consultant-detail-table">
-      <div className="consultant-detail-row heading"><span>执行时间</span><span>咨询师</span><span>项目／服务</span><span>服务数量</span><span>服务价格</span><span>服务成本</span><span>审核时间</span><span>操作</span></div>
+      <div className="consultant-detail-row heading"><span>执行时间</span><span>咨询师</span><span>项目／服务</span><span>服务数量</span><span>咨询师成本</span><span>物料成本</span><span>总成本</span><span>审核时间</span><span>操作</span></div>
       {filtered.map(record=>{
         const {project,service}=servicesFor(record),data=record.payload.data??{};
-        return <div className="consultant-detail-row" key={record.id}><span>{new Date(String(data.date??record.createdAt)).toLocaleDateString("zh-CN")}</span><strong>{String(data.provider).trim()}</strong><span><strong>{project?.name??"已归档项目"}</strong><small>{service?.name??record.recordType}</small></span><span>{Number(data.quantity??1)} {service?.unit??"次"}</span><span className="consultant-price">{record.costUnitSnapshot===null||record.costUnitSnapshot===undefined?"待补成本":`${money(record.costUnitSnapshot)} / ${service?.unit??"次"}`}</span><strong>{record.costAmountSnapshot===null||record.costAmountSnapshot===undefined?"—":money(record.costAmountSnapshot)}</strong><span>{new Date(record.approvedAt??record.updatedAt??record.createdAt).toLocaleString("zh-CN",{month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit"})}</span><button onClick={()=>onView(record)}>查看</button></div>;
+        const quantity=Number(data.quantity??1),start=recordStartDate(data),end=recordEndDate(data);
+        return <div className="consultant-detail-row" key={record.id}><span>{start&&end&&start!==end?`${start} 至 ${end}`:start||new Date(record.createdAt).toLocaleDateString("zh-CN")}</span><strong>{String(data.provider).trim()}</strong><span><strong>{project?.name??"已归档项目"}</strong><small>{service?.name??record.recordType}</small></span><span>{quantity} {service?.unit??"次"}</span><span className="consultant-price">{money(consultantCost(record))} / {service?.unit??"次"}</span><span>{money(materialCost(record))} / {service?.unit??"次"}</span><strong>{record.costAmountSnapshot===null||record.costAmountSnapshot===undefined?"—":money(record.costAmountSnapshot)}</strong><span>{new Date(record.approvedAt??record.updatedAt??record.createdAt).toLocaleString("zh-CN",{month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit"})}</span><button onClick={()=>onView(record)}>查看</button></div>;
       })}
       {!filtered.length&&<div className="empty-records"><strong>暂无服务明细</strong><span>请更换咨询师筛选条件</span></div>}
     </div>
@@ -746,7 +756,8 @@ function Consultants({records,projects,onView}:{records:ServiceRecord[];projects
 }
 
 const recordFieldLabels:Record<string,string>={
-  provider:"服务人员",date:"服务日期",quantity:"完成数量",summary:"服务执行情况",
+  provider:"服务人员",date:"服务日期（历史）",startDate:"服务开始日期",endDate:"服务结束日期",quantity:"完成数量",summary:"服务执行情况",
+  consultantCostUnit:"咨询师成本单价",materialCostUnit:"物料成本单价",
   method:"咨询方式",duration:"咨询时长（分钟）",issueType:"问题类型",risk:"风险情况",
   topic:"活动主题",participants:"参与人数",location:"活动地点",source:"填写来源"
 };
@@ -754,7 +765,7 @@ function ViewRecordDialog({record,projects,close}:{record:ServiceRecord;projects
   const project=projects.find(item=>item.id===record.projectId);
   const service=project?.services.find(item=>item.id===record.serviceId);
   const data=record.payload.data??{};
-  const hidden=new Set(["projectId","serviceId","recordType","status","costUnit"]);
+  const hidden=new Set(["projectId","serviceId","recordType","status","costUnit","consultantCostUnit","materialCostUnit"]);
   const details=Object.entries(data).filter(([key,value])=>!hidden.has(key)&&value!==""&&value!==null&&value!==undefined);
   const timestamp=record.status==="已完成"&&record.approvedAt?record.approvedAt:record.updatedAt||record.createdAt;
   return <div className="review-dialog view-record-dialog">
@@ -773,18 +784,20 @@ function ViewRecordDialog({record,projects,close}:{record:ServiceRecord;projects
   </div>;
 }
 function ReviewRecordDialog({record,projects,notify,close,onApproved}:{record:ServiceRecord;projects:Project[];notify:(s:string)=>void;close:()=>void;onApproved:()=>Promise<void>}){
-  const [costUnit,setCostUnit]=useState("");
+  const [consultantCostUnit,setConsultantCostUnit]=useState("");
+  const [materialCostUnit,setMaterialCostUnit]=useState("");
   const [submitting,setSubmitting]=useState(false);
   const project=projects.find(item=>item.id===record.projectId);
   const service=project?.services.find(item=>item.id===record.serviceId);
   const data=record.payload.data??{};
-  const hidden=new Set(["projectId","serviceId","recordType","status","costUnit"]);
+  const hidden=new Set(["projectId","serviceId","recordType","status","costUnit","consultantCostUnit","materialCostUnit"]);
   const details=Object.entries(data).filter(([key,value])=>!hidden.has(key)&&value!==""&&value!==null&&value!==undefined);
-  const profitRate=service&&service.unitPrice>0&&costUnit!==""?(service.unitPrice-Number(costUnit))/service.unitPrice*100:null;
+  const totalCost=consultantCostUnit!==""&&materialCostUnit!==""?Number(consultantCostUnit)+Number(materialCostUnit):null;
+  const profitRate=service&&service.unitPrice>0&&totalCost!==null?(service.unitPrice-totalCost)/service.unitPrice*100:null;
   async function approve(){
-    if(costUnit==="")return;
+    if(consultantCostUnit===""||materialCostUnit==="")return;
     setSubmitting(true);
-    const response=await fetch(appPath("/api/records"),{method:"PATCH",headers:{"content-type":"application/json"},body:JSON.stringify({id:record.id,status:"已完成",data:{costUnit:Number(costUnit)}})});
+    const response=await fetch(appPath("/api/records"),{method:"PATCH",headers:{"content-type":"application/json"},body:JSON.stringify({id:record.id,status:"已完成",data:{consultantCostUnit:Number(consultantCostUnit),materialCostUnit:Number(materialCostUnit)}})});
     const result=await response.json().catch(()=>({})) as {error?:string};
     if(!response.ok){setSubmitting(false);notify(result.error??"审核失败，请重试");return}
     await onApproved();notify("审核通过，交付金额、成本和利润率已冻结");
@@ -798,11 +811,13 @@ function ReviewRecordDialog({record,projects,notify,close,onApproved}:{record:Se
     <section className="review-section"><h3>活动资料与附件</h3><Attachments recordId={record.id} previewImages/></section>
     <section className="review-section review-finance"><h3>审核及成本确认</h3><div className="review-finance-grid">
       <div><small>服务单价</small><strong>{money(service?.unitPrice??0)} / {service?.unit??"次"}</strong></div>
-      <label>本次成本单价（元）<input aria-label="审核成本单价" type="number" min="0" step="0.01" value={costUnit} onChange={e=>setCostUnit(e.target.value)} required placeholder="必填后方可审核"/></label>
+      <label>咨询师成本单价（元）<input aria-label="审核咨询师成本单价" type="number" min="0" step="0.01" value={consultantCostUnit} onChange={e=>setConsultantCostUnit(e.target.value)} required placeholder="必填后方可审核"/></label>
+      <label>物料成本单价（元）<input aria-label="审核物料成本单价" type="number" min="0" step="0.01" value={materialCostUnit} onChange={e=>setMaterialCostUnit(e.target.value)} required placeholder="无物料成本请填0"/></label>
+      <div><small>合计成本单价</small><strong>{totalCost===null?"填写成本后计算":money(totalCost)}</strong></div>
       <div><small>本次交付金额</small><strong>{money((service?.unitPrice??0)*Number(data.quantity??1))}</strong></div>
       <div><small>单条利润率</small><strong className={profitRate!==null&&profitRate<0?"negative-profit":""}>{profitRate===null?"填写成本后计算":`${profitRate.toFixed(1)}%`}</strong></div>
     </div></section>
-    <div className="modal-actions"><button type="button" onClick={close}>取消</button><button type="button" className="primary" disabled={costUnit===""||submitting} onClick={approve}>{submitting?"审核处理中…":"审核通过"}</button></div>
+    <div className="modal-actions"><button type="button" onClick={close}>取消</button><button type="button" className="primary" disabled={consultantCostUnit===""||materialCostUnit===""||submitting} onClick={approve}>{submitting?"审核处理中…":"审核通过"}</button></div>
   </div>;
 }
 
@@ -846,17 +861,20 @@ function ExternalLinks({projects,notify,onAdd}:{projects:Project[];notify:(s:str
 function EditRecordForm({record,projects,onSave,close}:{record:ServiceRecord;projects:Project[];onSave:(d:FormData)=>void;close:()=>void}) {
   const data=record.payload.data??{};
   const [projectId,setProjectId]=useState(record.projectId||projects[0]?.id||0);
-  const [costUnit,setCostUnit]=useState(String(data.costUnit??record.costUnitSnapshot??""));
+  const [consultantCostUnit,setConsultantCostUnit]=useState(String(data.consultantCostUnit??data.costUnit??record.costUnitSnapshot??""));
+  const [materialCostUnit,setMaterialCostUnit]=useState(String(data.materialCostUnit??0));
   const current=projects.find(project=>project.id===projectId);
   const service=current?.services.find(item=>item.id===record.serviceId)??current?.services[0];
-  const profitRate=service&&service.unitPrice>0&&costUnit!==""?(service.unitPrice-Number(costUnit))/service.unitPrice*100:null;
+  const totalCost=consultantCostUnit!==""&&materialCostUnit!==""?Number(consultantCostUnit)+Number(materialCostUnit):null;
+  const profitRate=service&&service.unitPrice>0&&totalCost!==null?(service.unitPrice-totalCost)/service.unitPrice*100:null;
   return <form action={onSave}><div className="modal-title"><h2>修改服务记录</h2><p>可修改内部或外部提交内容，保存后金额与进度同步更新。</p></div>
     <div className="form-grid"><label>所属项目<ProjectSearchSelect name="projectId" projects={projects} value={projectId} onChange={value=>setProjectId(Number(value))}/></label>
       <label>服务内容<select name="serviceId" key={projectId} defaultValue={projectId===record.projectId?record.serviceId:current?.services[0]?.id}>{current?.services.map(service=><option value={service.id} key={service.id}>{service.name}</option>)}</select></label>
-      <label>记录类型<select name="recordType" defaultValue={record.recordType}><option>讲座／团辅活动记录</option><option>心理咨询台账</option><option>培训活动记录</option><option>驻场服务记录</option><option>EAP宣传记录</option></select></label>
+      <label>记录类型<select name="recordType" defaultValue={record.recordType}><option>讲座／团辅活动记录</option><option>心理咨询台账</option><option>培训活动记录</option><option>驻场服务记录</option><option>EAP宣传记录</option><option>心理测评记录</option></select></label>
       <label>服务人员<input name="provider" required defaultValue={String(data.provider??"")}/></label>
-      <label>服务日期<input name="date" type="date" required defaultValue={String(data.date??"")}/></label><label>本次完成数量<input name="quantity" type="number" min="1" required defaultValue={Number(data.quantity??1)}/></label>
-      <label>本次成本单价（元）<input name="costUnit" type="number" min="0" step="0.01" value={costUnit} onChange={e=>setCostUnit(e.target.value)} required={record.status==="已完成"} placeholder={record.status==="待审核"?"可在审核时填写":"必填"}/></label>
+      <label>服务开始日期<input name="startDate" type="date" required defaultValue={recordStartDate(data)}/></label><label>服务结束日期<input name="endDate" type="date" required defaultValue={recordEndDate(data)}/></label><label>本次完成数量<input name="quantity" type="number" min="1" required defaultValue={Number(data.quantity??1)}/></label>
+      <label>咨询师成本单价（元）<input name="consultantCostUnit" type="number" min="0" step="0.01" value={consultantCostUnit} onChange={e=>setConsultantCostUnit(e.target.value)} required={record.status==="已完成"} placeholder={record.status==="待审核"?"可在审核时填写":"必填"}/></label>
+      <label>物料成本单价（元）<input name="materialCostUnit" type="number" min="0" step="0.01" value={materialCostUnit} onChange={e=>setMaterialCostUnit(e.target.value)} required={record.status==="已完成"} placeholder="无物料成本请填0"/></label>
       <div className="profit-preview"><small>单条利润率</small><strong className={profitRate!==null&&profitRate<0?"negative-profit":""}>{profitRate===null?"填写成本后计算":`${profitRate.toFixed(1)}%`}</strong></div>
       <label className="full">服务执行情况<textarea name="summary" required defaultValue={String(data.summary??"")}/></label></div>
     <div className="modal-actions"><button type="button" onClick={close}>取消</button><button className="primary">保存修改</button></div></form>;
