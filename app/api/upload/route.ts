@@ -2,6 +2,7 @@ import { and, eq, isNull } from "drizzle-orm";
 import { getDb } from "../../../db";
 import { fileAttachments, formLinks } from "../../../db/schema";
 import { requireApiUser } from "../../auth";
+import { deleteFile, putFile } from "../../file-storage";
 
 const allowed=new Set([
   "image/jpeg","image/png","application/pdf",
@@ -27,10 +28,9 @@ export async function POST(request:Request){
     if(!(file instanceof File))return Response.json({error:"请选择文件"},{status:400});
     if(file.size<=0||file.size>20*1024*1024)return Response.json({error:"文件大小必须在20MB以内"},{status:400});
     if(!allowed.has(file.type)||!ext.test(file.name))return Response.json({error:"仅支持图片、PDF、Office文档"},{status:400});
-    const {env}=await import("cloudflare:workers");
     const safeName=file.name.replace(/[^\w.\-\u4e00-\u9fa5]/g,"_");
     const key=`service-files/${new Date().toISOString().slice(0,10)}/${crypto.randomUUID()}-${safeName}`;
-    await env.BUCKET.put(key,await file.arrayBuffer(),{httpMetadata:{contentType:file.type}});
+    await putFile(key,await file.arrayBuffer());
     const db=await getDb();
     const [saved]=await db.insert(fileAttachments).values({storageKey:key,originalName:file.name,contentType:file.type,size:file.size,uploadedBy,formToken:token||null}).returning();
     return Response.json({id:saved.id,key,name:file.name,size:file.size});
@@ -42,7 +42,7 @@ export async function DELETE(request:Request){
   const id=Number(new URL(request.url).searchParams.get("id"));if(!id)return Response.json({error:"id is required"},{status:400});
   const db=await getDb(),[file]=await db.select().from(fileAttachments).where(and(eq(fileAttachments.id,id),isNull(fileAttachments.deletedAt))).limit(1);
   if(!file)return Response.json({error:"附件不存在"},{status:404});
-  const {env}=await import("cloudflare:workers");await env.BUCKET.delete(file.storageKey);
+  await deleteFile(file.storageKey);
   await db.update(fileAttachments).set({deletedAt:new Date().toISOString()}).where(eq(fileAttachments.id,id));
   return Response.json({deleted:true});
 }
