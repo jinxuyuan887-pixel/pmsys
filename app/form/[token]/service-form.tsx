@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { appPath } from "../../base-path";
 
 const consultationServices=new Set(["线上咨询","线下咨询","驻场咨询"]);
 
@@ -9,7 +10,7 @@ export default function ExternalServiceForm({token}:{token:string}) {
   const [error,setError]=useState("");
   const [done,setDone]=useState(false);
   const [submitting,setSubmitting]=useState(false);
-  useEffect(()=>{fetch(`/api/form-links?token=${encodeURIComponent(token)}`).then(async response=>{const data=await response.json();if(!response.ok)throw new Error(data.error);setMeta(data)}).catch(error=>setError(error.message))},[token]);
+  useEffect(()=>{fetch(appPath(`/api/form-links?token=${encodeURIComponent(token)}`)).then(async response=>{const data=await response.json();if(!response.ok)throw new Error(data.error);setMeta(data)}).catch(error=>setError(error.message))},[token]);
   async function submit(formData:FormData){
     if(submitting)return;
     setSubmitting(true);setError("");
@@ -17,13 +18,13 @@ export default function ExternalServiceForm({token}:{token:string}) {
     const uploaded:string[]=[];
     for(const file of files){
       const upload=new FormData(); upload.append("file",file);upload.append("token",token);
-      const response=await fetch("/api/upload",{method:"POST",body:upload});
+      const response=await fetch(appPath("/api/upload"),{method:"POST",body:upload});
       if(response.ok){const data=await response.json();uploaded.push(data.key)}
       else{const data=await response.json().catch(()=>({}));setError(data.error??`附件“${file.name}”上传失败`);setSubmitting(false);return}
     }
     const data:Record<string,string>={};
     formData.forEach((value,key)=>{if(typeof value==="string")data[key]=value});
-    const response=await fetch("/api/records",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({token,type:meta?.formType,uploaded,data})});
+    const response=await fetch(appPath("/api/records"),{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({token,type:meta?.formType,uploaded,data})});
     if(response.ok)setDone(true);
     else{const result=await response.json().catch(()=>({}));setError(result.error??"提交失败，请检查填写内容后重试");setSubmitting(false)}
   }
