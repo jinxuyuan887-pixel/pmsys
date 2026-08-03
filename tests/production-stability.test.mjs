@@ -24,7 +24,7 @@ test("record API uses soft deletion and server-side amount snapshots", async () 
   assert.match(route, /costUnitSnapshot/);
   assert.match(route, /costAmountSnapshot/);
   assert.match(route, /profitRateBasisPoints/);
-  assert.match(route, /请填写本次成本单价后再审核通过/);
+  assert.match(route, /咨询师成本和物料成本/);
 });
 
 test("record cost migration supports frozen profit calculations", async () => {
@@ -114,10 +114,36 @@ test("consultant aggregation uses approved provider records and frozen cost pric
   assert.match(dashboard, /function Consultants/);
   assert.match(dashboard, /record\.status==="已完成"/);
   assert.match(dashboard, /record\.payload\.data\?\.provider/);
-  assert.match(dashboard, /record\.costUnitSnapshot/);
+  assert.match(dashboard, /consultantCost\(record\)/);
+  assert.match(dashboard, /materialCost\(record\)/);
   assert.match(dashboard, /record\.costAmountSnapshot/);
   assert.match(dashboard, /同一咨询师的不同服务、不同审核价格分别归集/);
   assert.match(dashboard, /输入姓名模糊搜索/);
+});
+
+test("service records use date ranges, assessment records, and split cost inputs", async () => {
+  const dashboard = await read("app/ui/DashboardApp.tsx");
+  const externalForm = await read("app/form/[token]/service-form.tsx");
+  const recordRoute = await read("app/api/records/route.ts");
+  const linkRoute = await read("app/api/form-links/route.ts");
+  for (const source of [dashboard, externalForm]) {
+    assert.match(source, /name="startDate"/);
+    assert.match(source, /name="endDate"/);
+  }
+  for (const source of [dashboard, linkRoute, recordRoute]) assert.match(source, /心理测评记录/);
+  assert.match(dashboard, /name="consultantCostUnit"/);
+  assert.match(dashboard, /name="materialCostUnit"/);
+  assert.match(recordRoute, /consultantCostOf/);
+  assert.match(recordRoute, /materialCostOf/);
+  assert.match(recordRoute, /服务结束日期不能早于开始日期/);
+  assert.match(dashboard, /咨询师成本/);
+  assert.match(dashboard, /物料成本/);
+});
+
+test("new project price inputs start blank instead of displaying zero", async () => {
+  const dashboard = await read("app/ui/DashboardApp.tsx");
+  assert.match(dashboard, /item\.unitPrice===0\?"":item\.unitPrice/);
+  assert.match(dashboard, /\(item\.costPrice\?\?0\)===0\?"":item\.costPrice/);
 });
 
 test("project deletion is archival and demo projects are marked", async () => {

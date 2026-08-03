@@ -4,7 +4,7 @@ import { auditLogs, formLinks, projects } from "../../../db/schema";
 import { randomHex, requireApiUser } from "../../auth";
 import { appPath } from "../../base-path";
 
-const allowedTypes=["心理咨询台账","讲座／团辅活动记录","培训活动记录","驻场服务记录","EAP宣传记录"];
+const allowedTypes=["心理咨询台账","讲座／团辅活动记录","培训活动记录","驻场服务记录","EAP宣传记录","心理测评记录"];
 
 export async function POST(request:Request){
   const auth=await requireApiUser(request);if(auth.response||!auth.user)return auth.response;
