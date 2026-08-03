@@ -1,10 +1,12 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { appPath } from "../base-path";
 
 type Service = {
   id: number;
   name: string;
+  contractDetail?: string;
   unit: string;
   quantity: number;
   completed: number;
@@ -16,6 +18,7 @@ type Project = {
   id: number;
   name: string;
   manager: string;
+  managerIds?: number[];
   status: "执行中" | "待启动" | "已完成";
   risk: "正常" | "预警" | "风险";
   start: string;
@@ -36,6 +39,7 @@ type ServiceRecord = {
   payload:{data?:Record<string,unknown>;uploaded?:string[];type?:string};
 };
 type CurrentUser={id:number;username:string;name:string;role:string;mustChangePassword:boolean};
+type ProjectManagerAccount={id:number;username:string;name:string;role:string;active:boolean};
 const defaultCatalog:ServiceTemplate[] = [
   {id:1,name:"EAP大使培训",defaultUnit:"场",category:"培训",enabled:true},
   {id:2,name:"心理讲座",defaultUnit:"场",category:"活动",enabled:true},
@@ -44,7 +48,6 @@ const defaultCatalog:ServiceTemplate[] = [
   {id:5,name:"线下咨询",defaultUnit:"人次",category:"心理咨询",enabled:true},
   {id:6,name:"驻场咨询",defaultUnit:"天",category:"心理咨询",enabled:true},
   {id:7,name:"心理测评",defaultUnit:"人次",category:"测评",enabled:true},
-  {id:8,name:"EAP宣传",defaultUnit:"期",category:"宣传",enabled:true},
 ];
 
 const nav = [
@@ -79,9 +82,34 @@ function withAutomaticStatus(project:Project):Project{
   if(isProjectFinished(project))return {...project,status:"已完成"};
   return project.status==="已完成"?{...project,status:"执行中"}:project;
 }
+function projectHasManager(project:Project,manager:string){
+  return project.manager.split("、").map(name=>name.trim()).includes(manager);
+}
 
 function money(value: number) {
   return `¥${value.toLocaleString("zh-CN")}`;
+}
+
+async function copyText(text:string){
+  try{
+    if(navigator.clipboard&&window.isSecureContext){
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  }catch{
+    // HTTP and restricted browser contexts fall back to a temporary text box.
+  }
+  const input=document.createElement("textarea");
+  input.value=text;
+  input.setAttribute("readonly","");
+  input.style.position="fixed";
+  input.style.left="-9999px";
+  document.body.appendChild(input);
+  input.select();
+  input.setSelectionRange(0,input.value.length);
+  const copied=document.execCommand("copy");
+  input.remove();
+  return copied;
 }
 
 export default function DashboardApp({currentUser}:{currentUser:CurrentUser}) {
@@ -90,6 +118,7 @@ export default function DashboardApp({currentUser}:{currentUser:CurrentUser}) {
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [modal, setModal] = useState<"project" | "service" | "link" | "managerRecord" | "viewRecord" | "reviewRecord" | "editRecord" | "account" | "profile" | "securityNotice" | "catalog" | null>(currentUser.mustChangePassword?"securityNotice":null);
   const [catalog,setCatalog]=useState<ServiceTemplate[]>(defaultCatalog);
+  const [projectManagerAccounts,setProjectManagerAccounts]=useState<ProjectManagerAccount[]>([]);
   const [records,setRecords]=useState<ServiceRecord[]>([]);
   const [editingRecord,setEditingRecord]=useState<ServiceRecord|null>(null);
   const [viewingRecord,setViewingRecord]=useState<ServiceRecord|null>(null);
@@ -109,15 +138,16 @@ export default function DashboardApp({currentUser}:{currentUser:CurrentUser}) {
     const approved=records.filter(record=>record.projectId===project.id&&record.status==="已完成");
     const revenue=approved.reduce((sum,record)=>sum+(record.amountSnapshot??0),0);
     const cost=approved.reduce((sum,record)=>sum+(record.costAmountSnapshot??0),0);
-    return {revenue,cost,profitRate:revenue>0?(revenue-cost)/revenue*100:null};
+    const missingCost=approved.some(record=>record.costAmountSnapshot===null||record.costAmountSnapshot===undefined);
+    return {revenue,cost,missingCost,profitRate:revenue>0&&!missingCost?(revenue-cost)/revenue*100:null};
   };
   const productionProjects=projects.filter(project=>!project._isDemo&&!project._archivedAt);
   const average = productionProjects.length?Math.round(productionProjects.reduce((s, p) => s + projectProgress(p), 0) / productionProjects.length):0;
-  const projectManagers=useMemo(()=>Array.from(new Set(projects.map(project=>project.manager.trim()).filter(Boolean))).sort((a,b)=>a.localeCompare(b,"zh-CN")),[projects]);
-  const managerScopedProjects=projects.filter(project=>managerFilter==="all"||project.manager===managerFilter);
+  const projectManagers=useMemo(()=>Array.from(new Set(projects.flatMap(project=>project.manager.split("、").map(name=>name.trim()).filter(Boolean)))).sort((a,b)=>a.localeCompare(b,"zh-CN")),[projects]);
+  const managerScopedProjects=projects.filter(project=>managerFilter==="all"||projectHasManager(project,managerFilter));
 
   const visibleProjects = useMemo(
-    () => projects.filter(project=>managerFilter==="all"||project.manager===managerFilter).filter((p) => p.name.toLowerCase().includes(query.toLowerCase())).filter(project=>
+    () => projects.filter(project=>managerFilter==="all"||projectHasManager(project,managerFilter)).filter((p) => p.name.toLowerCase().includes(query.toLowerCase())).filter(project=>
       projectView==="archived"?Boolean(project._archivedAt):
       !project._archivedAt&&(projectView==="all"||(projectView==="finished"&&isProjectFinished(project))||(projectView==="active"&&!isProjectFinished(project)))
     ),
@@ -125,13 +155,13 @@ export default function DashboardApp({currentUser}:{currentUser:CurrentUser}) {
   );
 
   async function refreshProjects(){
-    const response=await fetch("/api/projects?includeArchived=1",{cache:"no-store"}).catch(()=>null);
+    const response=await fetch(appPath("/api/projects?includeArchived=1"),{cache:"no-store"}).catch(()=>null);
     if(response?.ok){const data=await response.json() as {projects?:Project[]};setProjects(data.projects??[])}
   }
 
   useEffect(() => {
     let active = true;
-    fetch("/api/projects?includeArchived=1")
+    fetch(appPath("/api/projects?includeArchived=1"))
       .then((response) => response.ok ? response.json() : Promise.reject())
       .then((data: { projects?: Project[] }) => {
         if (active) setProjects(data.projects??[]);
@@ -141,11 +171,18 @@ export default function DashboardApp({currentUser}:{currentUser:CurrentUser}) {
   }, []);
 
   useEffect(()=>{
-    fetch("/api/catalog").then(r=>r.ok?r.json():Promise.reject()).then((data:{items?:ServiceTemplate[]})=>{if(data.items?.length)setCatalog(data.items)}).catch(()=>undefined);
+    fetch(appPath("/api/catalog")).then(r=>r.ok?r.json():Promise.reject()).then((data:{items?:ServiceTemplate[]})=>{if(data.items?.length)setCatalog(data.items)}).catch(()=>undefined);
+  },[]);
+
+  useEffect(()=>{
+    fetch(appPath("/api/accounts"),{cache:"no-store"})
+      .then(response=>response.ok?response.json():Promise.reject())
+      .then((data:{accounts?:ProjectManagerAccount[]})=>setProjectManagerAccounts((data.accounts??[]).filter(account=>account.role==="项目经理"&&account.active)))
+      .catch(()=>notify("项目经理账号读取失败，请刷新重试"));
   },[]);
 
   async function refreshRecords(){
-    const response=await fetch("/api/records",{cache:"no-store"}).catch(()=>null);
+    const response=await fetch(appPath("/api/records"),{cache:"no-store"}).catch(()=>null);
     if(response?.ok){const data=await response.json() as {records?:ServiceRecord[]};setRecords(data.records??[])}
   }
 
@@ -159,7 +196,7 @@ export default function DashboardApp({currentUser}:{currentUser:CurrentUser}) {
 
   async function saveCatalog(next:ServiceTemplate[]){
     const previous=catalog;setCatalog(next);
-    const response=await fetch("/api/catalog",{method:"PUT",headers:{"content-type":"application/json"},body:JSON.stringify({items:next})}).catch(()=>null);
+    const response=await fetch(appPath("/api/catalog"),{method:"PUT",headers:{"content-type":"application/json"},body:JSON.stringify({items:next})}).catch(()=>null);
     if(!response?.ok){setCatalog(previous);const data=await response?.json().catch(()=>({})) as {error?:string}|undefined;notify(data?.error??"服务目录保存失败，已恢复原数据")}
   }
 
@@ -175,20 +212,20 @@ export default function DashboardApp({currentUser}:{currentUser:CurrentUser}) {
 
   async function deleteProject(id: number) {
     if (!window.confirm("确认归档这个项目吗？归档后不再进入日常统计，项目、服务记录和附件仍将长期保留。")) return;
-    const response=await fetch(`/api/projects?id=${id}`,{method:"DELETE"});
+    const response=await fetch(appPath(`/api/projects?id=${id}`),{method:"DELETE"});
     if(!response.ok){notify("项目归档失败，请刷新后重试");return}
     await refreshProjects();
     if (selectedId === id) setSelectedId(null);
     notify("项目已归档，历史交付明细已保留");
   }
   async function restoreProject(id:number){
-    const response=await fetch("/api/projects",{method:"PATCH",headers:{"content-type":"application/json"},body:JSON.stringify({action:"restore",id})});
+    const response=await fetch(appPath("/api/projects"),{method:"PATCH",headers:{"content-type":"application/json"},body:JSON.stringify({action:"restore",id})});
     if(!response.ok){notify("项目恢复失败，请重试");return}
     await refreshProjects();notify("项目已恢复到项目清单");
   }
 
   async function persistProject(next:Project,expectedVersion:number,audit=false){
-    const response=await fetch("/api/projects",{method:"PATCH",headers:{"content-type":"application/json"},body:JSON.stringify({project:next,expectedVersion,audit})});
+    const response=await fetch(appPath("/api/projects"),{method:"PATCH",headers:{"content-type":"application/json"},body:JSON.stringify({project:next,expectedVersion,audit})});
     const data=await response.json() as {project?:Project;error?:string;current?:Project};
     if(response.status===409){if(data.current)setProjects(items=>items.map(item=>item.id===next.id?data.current!:item));notify(data.error??"数据已更新，请重试");return null}
     if(!response.ok){notify(data.error??"保存失败，请重试");return null}
@@ -223,7 +260,8 @@ export default function DashboardApp({currentUser}:{currentUser:CurrentUser}) {
     const next: Project = withAutomaticStatus({
       ...base,
       name: String(form.get("name")),
-      manager: String(form.get("manager")),
+      managerIds: form.getAll("managerIds").map(Number).filter(Number.isSafeInteger),
+      manager: projectManagerAccounts.filter(manager=>form.getAll("managerIds").map(Number).includes(manager.id)).map(manager=>manager.name).join("、"),
       contract: String(form.get("contract")),
       total: Number(form.get("total")) || submittedServices.reduce((sum, item) => sum + item.quantity * item.unitPrice, 0),
       start: String(form.get("start")),
@@ -231,7 +269,7 @@ export default function DashboardApp({currentUser}:{currentUser:CurrentUser}) {
       status: String(form.get("status")) as Project["status"],
       services: submittedServices,
     });
-    const response=await fetch("/api/projects",{method:editing?"PATCH":"POST",headers:{"content-type":"application/json"},body:JSON.stringify(editing?{project:next,expectedVersion:editing._version??1,audit:true}:{project:next})});
+    const response=await fetch(appPath("/api/projects"),{method:editing?"PATCH":"POST",headers:{"content-type":"application/json"},body:JSON.stringify(editing?{project:next,expectedVersion:editing._version??1,audit:true}:{project:next})});
     const data=await response.json() as {project?:Project;error?:string;current?:Project};
     if(!response.ok){if(data.current)setProjects(items=>items.map(item=>item.id===next.id?data.current!:item));notify(data.error??"项目保存失败");return}
     const saved=data.project??next;
@@ -245,6 +283,7 @@ export default function DashboardApp({currentUser}:{currentUser:CurrentUser}) {
     const service: Service = {
       id: Date.now(),
       name: String(form.get("name")),
+      contractDetail: String(form.get("contractDetail")).trim(),
       unit: String(form.get("unit")),
       quantity: Number(form.get("quantity")),
       completed: 0,
@@ -262,10 +301,10 @@ export default function DashboardApp({currentUser}:{currentUser:CurrentUser}) {
     const quantity=Number(form.get("quantity"))||1;
     const uploaded:string[]=[];
     for(const file of form.getAll("files")){
-      if(file instanceof File&&file.size>0){const upload=new FormData();upload.append("file",file);const response=await fetch("/api/upload",{method:"POST",body:upload});if(response.ok){const data=await response.json();uploaded.push(data.key)}}
+      if(file instanceof File&&file.size>0){const upload=new FormData();upload.append("file",file);const response=await fetch(appPath("/api/upload"),{method:"POST",body:upload});if(response.ok){const data=await response.json();uploaded.push(data.key)}}
     }
     const payload={source:"项目经理填写",projectId,serviceId,recordType:String(form.get("recordType")),provider:String(form.get("provider")),date:String(form.get("date")),quantity,costUnit:Number(form.get("costUnit")),summary:String(form.get("summary")),status:"已完成"};
-    const response=await fetch("/api/records",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({type:payload.recordType,data:payload,uploaded})}).catch(()=>null);
+    const response=await fetch(appPath("/api/records"),{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({type:payload.recordType,data:payload,uploaded})}).catch(()=>null);
     if(!response?.ok){const data=await response?.json().catch(()=>({})) as {error?:string}|undefined;notify(data?.error??"服务记录保存失败，项目进度未变更");return}
     setModal(null);
     await Promise.all([refreshRecords(),refreshProjects()]);
@@ -278,7 +317,7 @@ export default function DashboardApp({currentUser}:{currentUser:CurrentUser}) {
     const oldQuantity=Number(editingRecord.payload.data?.quantity??1),wasCompleted=editingRecord.status==="已完成";
     const costValue=form.get("costUnit");
     const data={...editingRecord.payload.data,projectId,serviceId,recordType:String(form.get("recordType")),provider:String(form.get("provider")),date:String(form.get("date")),quantity,...(costValue!==null&&String(costValue)!==""?{costUnit:Number(costValue)}:{}),summary:String(form.get("summary"))};
-    const response=await fetch("/api/records",{method:"PATCH",headers:{"content-type":"application/json"},body:JSON.stringify({id:editingRecord.id,type:String(form.get("recordType")),data})});
+    const response=await fetch(appPath("/api/records"),{method:"PATCH",headers:{"content-type":"application/json"},body:JSON.stringify({id:editingRecord.id,type:String(form.get("recordType")),data})});
     if(!response.ok){notify("记录修改失败，请重试");return}
     void oldQuantity;void wasCompleted;
     setModal(null);setEditingRecord(null);await Promise.all([refreshRecords(),refreshProjects()]);notify("服务记录已修改，冻结金额与项目进度已同步更新");
@@ -362,12 +401,12 @@ export default function DashboardApp({currentUser}:{currentUser:CurrentUser}) {
             <div className="detail-summary">
               <div><small>项目总价</small><strong>{money(selected.total)}</strong></div>
               <div><small>服务执行进度</small><strong>{projectProgress(selected)}%</strong></div>
-              <div><small>项目总利润率</small><strong className="profit-number">{projectFinance(selected).profitRate===null?"待产生交付":`${projectFinance(selected).profitRate!.toFixed(1)}%`}</strong></div>
+              <div><small>项目总利润率</small><strong className="profit-number">{projectFinance(selected).missingCost?"待补历史成本":projectFinance(selected).profitRate===null?"待产生交付":`${projectFinance(selected).profitRate!.toFixed(1)}%`}</strong></div>
               <div><small>服务项数</small><strong>{selected.services.length} 项</strong></div>
             </div>
             <div className="progress-explain">
               <div><span>数量进度</span><strong>{projectProgress(selected)}%</strong><small>已执行数量 ÷ 合同约定数量</small></div>
-              <div><span>金额进度</span><strong>{frozenAmountProgress(selected)}%</strong><small>交付 {money(projectFinance(selected).revenue)} · 成本 {money(projectFinance(selected).cost)}</small></div>
+              <div><span>金额进度</span><strong>{frozenAmountProgress(selected)}%</strong><small>交付 {money(projectFinance(selected).revenue)} · {projectFinance(selected).missingCost?"部分历史成本待补":`成本 ${money(projectFinance(selected).cost)}`}</small></div>
               <div><span>时间进度</span><strong>{timeProgress(selected)}%</strong><small>已过项目天数 ÷ 项目总天数</small></div>
               <div><span>剩余服务数量</span><strong>{selected.services.reduce((sum,service)=>sum+Math.max(0,service.quantity-service.completed),0)}</strong><small>合同数量减去已审核交付数量</small></div>
             </div>
@@ -375,7 +414,7 @@ export default function DashboardApp({currentUser}:{currentUser:CurrentUser}) {
             <div className="service-table">
               <div className="service-row heading"><span>服务内容</span><span>计量方式</span><span>单价</span><span>合同金额</span><span>执行进度</span><span>操作</span></div>
               {selected.services.map((s)=><div className="service-row" key={s.id}>
-                <span><strong>{s.name}</strong><small>支持自定义字段</small></span><span>{s.completed}/{s.quantity} {s.unit}</span><span>{money(s.unitPrice)}/{s.unit}</span><span>{money(s.unitPrice*s.quantity)}</span>
+                <span><strong>{s.name}</strong><small>{s.contractDetail||"未填写合同详情说明"}</small></span><span>{s.completed}/{s.quantity} {s.unit}</span><span>{money(s.unitPrice)}/{s.unit}</span><span>{money(s.unitPrice*s.quantity)}</span>
                 <span><Progress value={Math.round(s.completed/s.quantity*100)} green/></span>
                 <span>{!selected._archivedAt&&<button onClick={()=>setModal("link")}>生成填写链接</button>}</span>
               </div>)}
@@ -394,7 +433,7 @@ export default function DashboardApp({currentUser}:{currentUser:CurrentUser}) {
       {modal && <div className="modal-backdrop" onMouseDown={()=>{if(!currentUser.mustChangePassword)setModal(null)}}>
         <div className="modal" onMouseDown={(e)=>e.stopPropagation()}>
           {!currentUser.mustChangePassword&&<button className="close" onClick={()=>setModal(null)}>×</button>}
-          {modal === "project" && <ProjectForm editing={editing} catalog={catalog} onSave={saveProject}/>}
+          {modal === "project" && <ProjectForm editing={editing} catalog={catalog} projectManagers={projectManagerAccounts} currentUser={currentUser} onSave={saveProject}/>}
           {modal === "service" && <ServiceForm catalog={catalog} onSave={saveService}/>}
           {modal === "link" && <LinkDialog projects={projects.filter(project=>!project._archivedAt)} selectedProjectId={selected?.id} notify={notify} close={()=>setModal(null)}/>}
           {modal === "managerRecord" && <ManagerRecordForm projects={projects.filter(project=>!project._archivedAt)} onSave={saveManagerRecord} close={()=>setModal(null)}/>}
@@ -426,24 +465,33 @@ function Status({value}:{value:string}) {
   return <span className={`status ${kind}`}>{value}</span>;
 }
 
-function ProjectForm({editing,catalog,onSave}:{editing:Project|null;catalog:ServiceTemplate[];onSave:(data:FormData)=>void}) {
+function ProjectForm({editing,catalog,projectManagers,currentUser,onSave}:{editing:Project|null;catalog:ServiceTemplate[];projectManagers:ProjectManagerAccount[];currentUser:CurrentUser;onSave:(data:FormData)=>void}) {
   const available=catalog.filter(item=>item.enabled);
-  const [services,setServices]=useState<Service[]>(()=>editing?.services ?? [{id:Date.now(),name:available[0]?.name??"",unit:available[0]?.defaultUnit??"场",quantity:1,completed:0,unitPrice:0,costPrice:0}]);
+  const initialManagerIds=editing?.managerIds?.length
+    ? editing.managerIds
+    : editing
+      ? projectManagers.filter(account=>editing.manager.split("、").includes(account.name)).map(account=>account.id)
+      : currentUser.role==="项目经理"
+        ? [currentUser.id]
+        : [];
+  const [selectedManagerIds,setSelectedManagerIds]=useState<number[]>(initialManagerIds);
+  const [services,setServices]=useState<Service[]>(()=>editing?.services ?? [{id:Date.now(),name:available[0]?.name??"",contractDetail:"",unit:available[0]?.defaultUnit??"场",quantity:1,completed:0,unitPrice:0,costPrice:0}]);
   const serviceTotal=services.reduce((sum,item)=>sum+item.quantity*item.unitPrice,0);
   function updateService(id:number,key:keyof Service,value:string){
     setServices(items=>items.map(item=>item.id===id?{...item,[key]:["quantity","unitPrice","costPrice"].includes(key)?Number(value):value}:item));
   }
   return <form action={onSave}><div className="modal-title"><h2>{editing?"编辑项目":"新增项目"}</h2><p>直接录入项目及服务信息，无需读取或解析合同。</p></div>
     <div className="form-grid"><label className="full">项目名称<input name="name" required defaultValue={editing?.name}/></label>
-      <label>合同编号<input name="contract" required defaultValue={editing?.contract}/></label><label>项目经理<input name="manager" required defaultValue={editing?.manager}/></label>
+      <label>合同编号<input name="contract" required defaultValue={editing?.contract}/></label>
+      <div className="manager-picker"><span>项目经理</span><small>可多选；项目经理新建时默认选择本人</small><div>{projectManagers.map(manager=><label key={manager.id}><input type="checkbox" name="managerIds" value={manager.id} checked={selectedManagerIds.includes(manager.id)} onChange={event=>setSelectedManagerIds(ids=>event.target.checked?[...ids,manager.id]:ids.filter(id=>id!==manager.id))}/><span><strong>{manager.name}</strong><small>@{manager.username}</small></span></label>)}</div>{!projectManagers.length&&<em>暂无启用中的项目经理账号，请先在账号管理中创建或启用。</em>}{projectManagers.length>0&&!selectedManagerIds.length&&<em>请至少选择一位项目经理</em>}</div>
       <label>项目总价（元）<input name="total" type="number" placeholder={`留空则按服务合计 ${serviceTotal} 元`} defaultValue={editing?.total}/></label><label>项目状态<select name="status" defaultValue={editing?.status}><option>执行中</option><option>待启动</option><option>已完成</option></select></label>
       <label>开始日期<input name="start" type="date" required defaultValue={editing?.start}/></label><label>结束日期<input name="end" type="date" required defaultValue={editing?.end}/></label>
       <label>合同文件（选填）<input type="file" accept=".pdf,.doc,.docx"/></label>
       <div className="full service-builder">
-        <div className="builder-title"><span><strong>项目服务内容</strong><small>服务名称从统一目录选择，数量和金额按项目独立设置</small></span><button type="button" onClick={()=>setServices(items=>[...items,{id:Date.now(),name:available[0]?.name??"",unit:available[0]?.defaultUnit??"场",quantity:1,completed:0,unitPrice:0,costPrice:0}])}>＋ 添加服务</button></div>
-        <div className="builder-head"><span>服务内容</span><span>单位</span><span>数量</span><span>销售单价</span><span>成本单价</span><span>金额小计</span><span/></div>
+        <div className="builder-title"><span><strong>项目服务内容</strong><small>服务大类从统一目录选择；合同详情说明用于区分同一大类下的具体服务细项</small></span><button type="button" onClick={()=>setServices(items=>[...items,{id:Date.now(),name:available[0]?.name??"",contractDetail:"",unit:available[0]?.defaultUnit??"场",quantity:1,completed:0,unitPrice:0,costPrice:0}])}>＋ 添加服务</button></div>
+        <div className="builder-head"><span>服务大类／合同详情说明</span><span>单位</span><span>数量</span><span>销售单价</span><span>成本单价</span><span>金额小计</span><span/></div>
         {services.map(item=><div className="builder-row" key={item.id}>
-          <select required value={item.name} onChange={e=>{const template=available.find(x=>x.name===e.target.value);setServices(items=>items.map(x=>x.id===item.id?{...x,name:e.target.value,unit:template?.defaultUnit??x.unit}:x))}}>{available.map(template=><option key={template.id}>{template.name}</option>)}</select>
+          <div className="builder-service"><select required value={item.name} onChange={e=>{const template=available.find(x=>x.name===e.target.value);setServices(items=>items.map(x=>x.id===item.id?{...x,name:e.target.value,unit:template?.defaultUnit??x.unit}:x))}}>{available.map(template=><option key={template.id}>{template.name}</option>)}</select><input required maxLength={500} placeholder="合同详情说明，如：压力管理专题讲座" value={item.contractDetail??""} onChange={e=>updateService(item.id,"contractDetail",e.target.value)}/></div>
           <select value={item.unit} onChange={e=>updateService(item.id,"unit",e.target.value)}><option>场</option><option>人次</option><option>小时</option><option>天</option><option>期</option><option>份</option></select>
           <input type="number" min="1" value={item.quantity} onChange={e=>updateService(item.id,"quantity",e.target.value)}/>
           <input type="number" min="0" value={item.unitPrice} onChange={e=>updateService(item.id,"unitPrice",e.target.value)}/>
@@ -455,12 +503,13 @@ function ProjectForm({editing,catalog,onSave}:{editing:Project|null;catalog:Serv
         <input type="hidden" name="services" value={JSON.stringify(services)}/>
       </div>
     </div>
-    <div className="modal-actions"><button type="button">保存草稿</button><button className="primary" type="submit">{editing?"保存修改":"创建项目"}</button></div>
+    <div className="modal-actions"><button className="primary" type="submit" disabled={!selectedManagerIds.length}>{editing?"保存修改":"创建项目"}</button></div>
   </form>;
 }
 function ServiceForm({catalog,onSave}:{catalog:ServiceTemplate[];onSave:(d:FormData)=>void}) {
   return <form action={onSave}><div className="modal-title"><h2>添加项目服务</h2><p>从服务目录选择名称，数量和单价按当前项目独立设置。</p></div>
-    <div className="form-grid"><label className="full">服务内容<select name="name" required>{catalog.filter(x=>x.enabled).map(item=><option key={item.id}>{item.name}</option>)}</select></label>
+    <div className="form-grid"><label className="full">服务大类<select name="name" required>{catalog.filter(x=>x.enabled).map(item=><option key={item.id}>{item.name}</option>)}</select></label>
+      <label className="full">合同详情说明<input name="contractDetail" required maxLength={500} placeholder="标注合同约定的具体服务细项"/></label>
       <label>计量单位<select name="unit"><option>场</option><option>人次</option><option>小时</option><option>天</option><option>期</option><option>份</option></select></label>
       <label>服务数量<input name="quantity" type="number" min="1" required/></label><label>服务单价（元）<input name="unitPrice" type="number" min="0" required/></label><label>成本单价（元）<input name="costPrice" type="number" min="0"/></label>
       <label>统计方式<select><option>审核通过后自动累计</option><option>手动更新进度</option><option>按完成状态统计</option></select></label>
@@ -556,7 +605,7 @@ function LinkDialog({projects,selectedProjectId,notify,close}:{projects:Project[
   const [link,setLink]=useState("");
   const current=projects.find(project=>project.id===projectId);
   async function generate(form:FormData){
-    const response=await fetch("/api/form-links",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({projectId,serviceId:Number(form.get("serviceId")),formType:String(form.get("formType")),expiresInDays:Number(form.get("expiresInDays"))||undefined,maxSubmissions:Number(form.get("maxSubmissions"))||1})});
+    const response=await fetch(appPath("/api/form-links"),{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({projectId,serviceId:Number(form.get("serviceId")),formType:String(form.get("formType")),expiresInDays:Number(form.get("expiresInDays"))||undefined,maxSubmissions:Number(form.get("maxSubmissions"))||1})});
     if(!response.ok){notify("链接生成失败，请重试");return}
     const data=await response.json() as {path:string};setLink(`${window.location.origin}${data.path}`);
   }
@@ -566,7 +615,7 @@ function LinkDialog({projects,selectedProjectId,notify,close}:{projects:Project[
       <label>填写表单<select name="formType"><option>心理咨询台账</option><option>讲座／团辅活动记录</option><option>培训活动记录</option><option>驻场服务记录</option><option>EAP宣传记录</option></select></label><label>链接有效期<select name="expiresInDays"><option value="7">7天</option><option value="30">30天</option><option value="">永久有效</option></select></label>
       <label className="full">允许提交次数<select name="maxSubmissions"><option value="1">仅一次</option><option value="9999">可重复提交</option></select></label></div>:
       <div className="generated-link"><span>✓</span><h3>项目专属链接已生成</h3><p>{link}</p><small>外部页面不显示项目金额，记录将自动归集至已绑定项目</small></div>}
-    <div className="modal-actions"><button type="button" onClick={close}>关闭</button>{!link?<button className="primary">生成链接</button>:<button type="button" className="primary" onClick={()=>{navigator.clipboard?.writeText(link);notify("填写链接已复制")}}>复制链接</button>}</div>
+    <div className="modal-actions"><button type="button" onClick={close}>关闭</button>{!link?<button className="primary">生成链接</button>:<button type="button" className="primary" onClick={async()=>notify(await copyText(link)?"填写链接已复制":"复制失败，请手动选择链接复制")}>复制链接</button>}</div>
   </form>;
 }
 function Records({records,projects,managerFilter,onManagerFilterChange,refresh,notify,onManagerRecord,onLink,onView,onReview,onEdit}:{records:ServiceRecord[];projects:Project[];managerFilter:string;onManagerFilterChange:(manager:string)=>void;refresh:()=>Promise<void>;notify:(s:string)=>void;onManagerRecord:()=>void;onLink:()=>void;onView:(record:ServiceRecord)=>void;onReview:(record:ServiceRecord)=>void;onEdit:(record:ServiceRecord)=>void}) {
@@ -580,7 +629,7 @@ function Records({records,projects,managerFilter,onManagerFilterChange,refresh,n
   const weekStart=new Date(today);weekStart.setDate(today.getDate()-((today.getDay()+6)%7));weekStart.setHours(0,0,0,0);
   const monthStart=new Date(today.getFullYear(),today.getMonth(),1);
   const managers=Array.from(new Set(projects.map(project=>project.manager.trim()).filter(Boolean))).sort((a,b)=>a.localeCompare(b,"zh-CN"));
-  const managerProjects=projects.filter(project=>managerFilter==="all"||project.manager===managerFilter);
+  const managerProjects=projects.filter(project=>managerFilter==="all"||projectHasManager(project,managerFilter));
   const managerProjectIds=new Set(managerProjects.map(project=>project.id));
   const inRange=(record:ServiceRecord)=>{
     const date=recordDate(record);
@@ -616,7 +665,7 @@ function Records({records,projects,managerFilter,onManagerFilterChange,refresh,n
   async function remove(record:ServiceRecord){
     if(!window.confirm("确认作废这条服务记录吗？作废后不再计入项目进度和交付金额，但操作记录会长期保留。"))return;
     setDeletingId(record.id);
-    const response=await fetch(`/api/records?id=${record.id}`,{method:"DELETE"});
+    const response=await fetch(appPath(`/api/records?id=${record.id}`),{method:"DELETE"});
     if(!response.ok){setDeletingId(null);notify("删除失败，请重试");return}
     await refresh();setDeletingId(null);notify("服务记录已作废，全部统计数据已实时更新");
   }
@@ -635,7 +684,7 @@ function Records({records,projects,managerFilter,onManagerFilterChange,refresh,n
     <div className="records-table"><div className="records-row heading"><span>执行时间</span><span>项目／服务</span><span>服务人员</span><span>完成数量</span><span>交付金额</span><span>成本／利润率</span><span>资料</span><span>状态／时间</span><span>操作</span></div>
       {filtered.length===0?<div className="empty-records"><strong>当前时间范围暂无服务记录</strong><span>可切换本周、本月、全部或自定义日期查看</span></div>:filtered.map(record=>{
         const data=record.payload.data??{},amount=recordAmount(record),service=serviceFor(record);
-        return <div className="records-row" key={record.id}><span>{recordDate(record).toLocaleDateString("zh-CN")}</span><span>{recordLabel(record)}</span><span>{String(data.provider??"未填写")}</span><span>{Number(data.quantity??1)} {service?.unit??"次"}</span><span className="amount-cell">{amount===null?"审核后冻结":money(amount)}</span><span className="profit-cell">{record.status==="已完成"?<><strong>{money(record.costAmountSnapshot??0)}</strong><small className={(record.profitRateBasisPoints??0)<0?"negative-profit":""}>{((record.profitRateBasisPoints??0)/100).toFixed(1)}%</small></>:<small>审核时填写</small>}</span><Attachments recordId={record.id}/><span className="record-time"><Status value={record.status==="已完成"?"已交付":record.status}/><small>{record.status==="已完成"?"审核":"提交/修改"} {recordTimestamp(record)}</small></span><span className="row-actions"><button onClick={()=>onView(record)}>查看</button>{record.status==="待审核"&&<button onClick={()=>onReview(record)}>审核</button>}<button onClick={()=>onEdit(record)}>修改</button><button className="danger-action" disabled={deletingId===record.id} onClick={()=>remove(record)}>{deletingId===record.id?"作废中…":"作废"}</button></span></div>
+        return <div className="records-row" key={record.id}><span>{recordDate(record).toLocaleDateString("zh-CN")}</span><span>{recordLabel(record)}</span><span>{String(data.provider??"未填写")}</span><span>{Number(data.quantity??1)} {service?.unit??"次"}</span><span className="amount-cell">{amount===null?"审核后冻结":money(amount)}</span><span className="profit-cell">{record.status==="已完成"?(record.costAmountSnapshot===null||record.costAmountSnapshot===undefined?<><strong>待补成本</strong><small>飞书历史数据</small></>:<><strong>{money(record.costAmountSnapshot)}</strong><small className={(record.profitRateBasisPoints??0)<0?"negative-profit":""}>{record.profitRateBasisPoints===null||record.profitRateBasisPoints===undefined?"—":`${(record.profitRateBasisPoints/100).toFixed(1)}%`}</small></>):<small>审核时填写</small>}</span><Attachments recordId={record.id}/><span className="record-time"><Status value={record.status==="已完成"?"已交付":record.status}/><small>{record.status==="已完成"?"审核":"提交/修改"} {recordTimestamp(record)}</small></span><span className="row-actions"><button onClick={()=>onView(record)}>查看</button>{record.status==="待审核"&&<button onClick={()=>onReview(record)}>审核</button>}<button onClick={()=>onEdit(record)}>修改</button><button className="danger-action" disabled={deletingId===record.id} onClick={()=>remove(record)}>{deletingId===record.id?"作废中…":"作废"}</button></span></div>
       })}
     </div>
   </section>;
@@ -689,7 +738,7 @@ function Consultants({records,projects,onView}:{records:ServiceRecord[];projects
       <div className="consultant-detail-row heading"><span>执行时间</span><span>咨询师</span><span>项目／服务</span><span>服务数量</span><span>服务价格</span><span>服务成本</span><span>审核时间</span><span>操作</span></div>
       {filtered.map(record=>{
         const {project,service}=servicesFor(record),data=record.payload.data??{};
-        return <div className="consultant-detail-row" key={record.id}><span>{new Date(String(data.date??record.createdAt)).toLocaleDateString("zh-CN")}</span><strong>{String(data.provider).trim()}</strong><span><strong>{project?.name??"已归档项目"}</strong><small>{service?.name??record.recordType}</small></span><span>{Number(data.quantity??1)} {service?.unit??"次"}</span><span className="consultant-price">{money(record.costUnitSnapshot??0)} / {service?.unit??"次"}</span><strong>{money(record.costAmountSnapshot??0)}</strong><span>{new Date(record.approvedAt??record.updatedAt??record.createdAt).toLocaleString("zh-CN",{month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit"})}</span><button onClick={()=>onView(record)}>查看</button></div>;
+        return <div className="consultant-detail-row" key={record.id}><span>{new Date(String(data.date??record.createdAt)).toLocaleDateString("zh-CN")}</span><strong>{String(data.provider).trim()}</strong><span><strong>{project?.name??"已归档项目"}</strong><small>{service?.name??record.recordType}</small></span><span>{Number(data.quantity??1)} {service?.unit??"次"}</span><span className="consultant-price">{record.costUnitSnapshot===null||record.costUnitSnapshot===undefined?"待补成本":`${money(record.costUnitSnapshot)} / ${service?.unit??"次"}`}</span><strong>{record.costAmountSnapshot===null||record.costAmountSnapshot===undefined?"—":money(record.costAmountSnapshot)}</strong><span>{new Date(record.approvedAt??record.updatedAt??record.createdAt).toLocaleString("zh-CN",{month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit"})}</span><button onClick={()=>onView(record)}>查看</button></div>;
       })}
       {!filtered.length&&<div className="empty-records"><strong>暂无服务明细</strong><span>请更换咨询师筛选条件</span></div>}
     </div>
@@ -735,7 +784,7 @@ function ReviewRecordDialog({record,projects,notify,close,onApproved}:{record:Se
   async function approve(){
     if(costUnit==="")return;
     setSubmitting(true);
-    const response=await fetch("/api/records",{method:"PATCH",headers:{"content-type":"application/json"},body:JSON.stringify({id:record.id,status:"已完成",data:{costUnit:Number(costUnit)}})});
+    const response=await fetch(appPath("/api/records"),{method:"PATCH",headers:{"content-type":"application/json"},body:JSON.stringify({id:record.id,status:"已完成",data:{costUnit:Number(costUnit)}})});
     const result=await response.json().catch(()=>({})) as {error?:string};
     if(!response.ok){setSubmitting(false);notify(result.error??"审核失败，请重试");return}
     await onApproved();notify("审核通过，交付金额、成本和利润率已冻结");
@@ -759,36 +808,36 @@ function ReviewRecordDialog({record,projects,notify,close,onApproved}:{record:Se
 
 function Attachments({recordId,previewImages=false}:{recordId:number;previewImages?:boolean}){
   const [files,setFiles]=useState<Array<{id:number;name:string;contentType?:string;size?:number}>>([]);
-  useEffect(()=>{fetch(`/api/files?recordId=${recordId}`).then(response=>response.ok?response.json():{files:[]}).then(data=>setFiles(data.files??[])).catch(()=>undefined)},[recordId]);
+  useEffect(()=>{fetch(appPath(`/api/files?recordId=${recordId}`)).then(response=>response.ok?response.json():{files:[]}).then(data=>setFiles(data.files??[])).catch(()=>undefined)},[recordId]);
   if(!files.length)return <span>无附件</span>;
   if(previewImages)return <div className="attachment-gallery">{files.map(file=>{
     const isImage=file.contentType?.startsWith("image/");
-    return <a className={isImage?"image-attachment":"file-attachment"} key={file.id} href={`/api/files?id=${file.id}${isImage?"&inline=1":""}`} target="_blank" rel="noreferrer">
+    return <a className={isImage?"image-attachment":"file-attachment"} key={file.id} href={appPath(`/api/files?id=${file.id}${isImage?"&inline=1":""}`)} target="_blank" rel="noreferrer">
       {isImage?<>
         <span className="sr-only">{file.name}</span>
         {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img src={`/api/files?id=${file.id}&inline=1`} alt={file.name}/>
+        <img src={appPath(`/api/files?id=${file.id}&inline=1`)} alt={file.name}/>
       </>:<span className="file-icon">文档</span>}
       <span><strong>{file.name}</strong><small>{isImage?"点击查看大图":"点击打开或下载"}{file.size?` · ${(file.size/1024/1024).toFixed(1)} MB`:""}</small></span>
     </a>;
   })}</div>;
-  return <span className="attachment-links">{files.map(file=><a key={file.id} href={`/api/files?id=${file.id}`} target="_blank" rel="noreferrer">{file.name}</a>)}</span>;
+  return <span className="attachment-links">{files.map(file=><a key={file.id} href={appPath(`/api/files?id=${file.id}`)} target="_blank" rel="noreferrer">{file.name}</a>)}</span>;
 }
 
 type ExternalLink={id:number;token:string;projectId:number;serviceId:number;formType:string;expiresAt?:string|null;maxSubmissions:number;submissionCount:number;status:string;createdAt:string;lastUsedAt?:string|null};
 function ExternalLinks({projects,notify,onAdd}:{projects:Project[];notify:(s:string)=>void;onAdd:()=>void}){
   const [links,setLinks]=useState<ExternalLink[]>([]);
-  async function load(){const response=await fetch("/api/form-links",{cache:"no-store"});if(response.ok){const data=await response.json();setLinks(data.links??[])}}
+  async function load(){const response=await fetch(appPath("/api/form-links"),{cache:"no-store"});if(response.ok){const data=await response.json();setLinks(data.links??[])}}
   useEffect(()=>{const timer=window.setTimeout(()=>void load(),0);return()=>window.clearTimeout(timer)},[]);
   async function toggle(link:ExternalLink){
     const next=link.status==="有效"?"已停用":"有效";
-    const response=await fetch("/api/form-links",{method:"PATCH",headers:{"content-type":"application/json"},body:JSON.stringify({id:link.id,status:next})});
+    const response=await fetch(appPath("/api/form-links"),{method:"PATCH",headers:{"content-type":"application/json"},body:JSON.stringify({id:link.id,status:next})});
     if(!response.ok){notify("链接状态修改失败");return}await load();notify(`链接已${next==="有效"?"启用":"停用"}`);
   }
   const label=(link:ExternalLink)=>{const project=projects.find(item=>item.id===link.projectId),service=project?.services.find(item=>item.id===link.serviceId);return `${project?.name??"已归档项目"}｜${service?.name??link.formType}`};
   return <section className="content-card"><div className="section-title"><div><h2>外部填写链接</h2><p>集中查看链接有效期、提交次数和使用状态，可随时停用</p></div><button className="primary" onClick={onAdd}>＋ 生成填写链接</button></div>
     <div className="link-table"><div className="link-row heading"><span>项目／服务</span><span>表单类型</span><span>提交进度</span><span>有效期</span><span>状态</span><span>操作</span></div>
-      {links.map(link=><div className="link-row" key={link.id}><strong>{label(link)}</strong><span>{link.formType}</span><span>{link.submissionCount}/{link.maxSubmissions}</span><span>{link.expiresAt?new Date(link.expiresAt).toLocaleDateString("zh-CN"):"永久"}</span><Status value={link.status}/><span><button onClick={()=>navigator.clipboard?.writeText(`${location.origin}/form/${link.token}`).then(()=>notify("填写链接已复制"))}>复制</button><button onClick={()=>toggle(link)}>{link.status==="有效"?"停用":"启用"}</button></span></div>)}
+      {links.map(link=><div className="link-row" key={link.id}><strong>{label(link)}</strong><span>{link.formType}</span><span>{link.submissionCount}/{link.maxSubmissions}</span><span>{link.expiresAt?new Date(link.expiresAt).toLocaleDateString("zh-CN"):"永久"}</span><Status value={link.status}/><span><button onClick={async()=>notify(await copyText(`${location.origin}${appPath(`/form/${link.token}`)}`)?"填写链接已复制":"复制失败，请手动选择链接复制")}>复制</button><button onClick={()=>toggle(link)}>{link.status==="有效"?"停用":"启用"}</button></span></div>)}
       {!links.length&&<div className="empty-records"><strong>还没有生成外部填写链接</strong><span>生成后可在这里统一查看和停用</span></div>}
     </div>
   </section>;
@@ -829,7 +878,7 @@ type AuditLog={id:number;username:string;action:string;entityType:string;entityI
 function Governance(){
   const [logs,setLogs]=useState<AuditLog[]>([]);
   const [start,setStart]=useState(""),[end,setEnd]=useState(""),[username,setUsername]=useState("all");
-  async function load(){const response=await fetch("/api/governance",{cache:"no-store"});if(response.ok){const data=await response.json();setLogs(data.logs??[])}}
+  async function load(){const response=await fetch(appPath("/api/governance"),{cache:"no-store"});if(response.ok){const data=await response.json();setLogs(data.logs??[])}}
   useEffect(()=>{const timer=window.setTimeout(()=>void load(),0);return()=>window.clearTimeout(timer)},[]);
   const usernames=Array.from(new Set(logs.map(log=>log.username))).sort((a,b)=>a.localeCompare(b,"zh-CN"));
   const filtered=logs.filter(log=>{
@@ -843,23 +892,23 @@ function Governance(){
 }
 function Accounts({currentUser,notify,onAdd}:{currentUser:CurrentUser;notify:(s:string)=>void;onAdd:()=>void}) {
   const [items,setItems]=useState<Array<{id:number;name:string;username:string;role:string;active:boolean}>>([]);
-  async function load(){const response=await fetch("/api/accounts");if(response.ok){const data=await response.json();setItems(data.accounts??[])}}
+  async function load(){const response=await fetch(appPath("/api/accounts"));if(response.ok){const data=await response.json();setItems(data.accounts??[])}}
   useEffect(()=>{const timer=window.setTimeout(()=>void load(),0);return()=>window.clearTimeout(timer)},[]);
-  async function toggle(item:{id:number;active:boolean}){await fetch("/api/accounts",{method:"PATCH",headers:{"content-type":"application/json"},body:JSON.stringify({id:item.id,active:!item.active})});await load()}
+  async function toggle(item:{id:number;active:boolean}){await fetch(appPath("/api/accounts"),{method:"PATCH",headers:{"content-type":"application/json"},body:JSON.stringify({id:item.id,active:!item.active})});await load()}
   async function resetPassword(item:{id:number;name:string}){
     const password=window.prompt(`请为“${item.name}”设置新的临时密码（至少6位）：`);
     if(password===null)return;
     if(password.length<6){notify("临时密码至少6位");return}
     if(!window.confirm(`确认重置“${item.name}”的密码吗？该账号下次登录时必须修改密码。`))return;
-    const response=await fetch("/api/accounts",{method:"PATCH",headers:{"content-type":"application/json"},body:JSON.stringify({id:item.id,newPassword:password})});
+    const response=await fetch(appPath("/api/accounts"),{method:"PATCH",headers:{"content-type":"application/json"},body:JSON.stringify({id:item.id,newPassword:password})});
     const data=await response.json();notify(response.ok?"密码已重置，请将临时密码单独告知该用户":data.error??"密码重置失败");
   }
   return <section className="content-card"><div className="section-title"><div><h2>账号设置</h2><p>当前仅管理员、项目经理两种可创建身份，均拥有完整查看和编辑权限</p></div><button className="primary" onClick={onAdd}>＋ 创建账号</button></div>
-    <div className="account-list">{items.map(a=><div key={a.id}><span className="avatar">{a.name[0]}</span><span><strong>{a.name}</strong><small>@{a.username}</small></span><span>{a.role}</span><Status value={a.active?"正常":"已停用"}/><span className="account-actions">{currentUser.username==="lanlan666"&&a.username!=="lanlan666"&&<button onClick={()=>resetPassword(a)}>重置密码</button>}{a.username!=="lanlan666"&&<button onClick={()=>toggle(a)}>{a.active?"停用":"启用"}</button>}</span></div>)}</div>
+    <div className="account-list">{items.map(a=><div key={a.id}><span className="avatar">{a.name[0]}</span><span><strong>{a.name}</strong><small>@{a.username}</small></span><span>{a.role}</span><Status value={a.active?"正常":"已停用"}/><span className="account-actions">{currentUser.username==="ydleapadmin"&&a.username!=="ydleapadmin"&&<button onClick={()=>resetPassword(a)}>重置密码</button>}{a.username!=="ydleapadmin"&&<button onClick={()=>toggle(a)}>{a.active?"停用":"启用"}</button>}</span></div>)}</div>
   </section>;
 }
 function AccountForm({notify,close}:{notify:(s:string)=>void;close:()=>void}) {
-  async function save(form:FormData){const response=await fetch("/api/accounts",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({name:String(form.get("name")),username:String(form.get("username")),role:String(form.get("role")),password:String(form.get("password"))})});if(!response.ok){notify("账号创建失败，请检查账号是否重复");return}notify("账号创建成功，首次登录需修改密码");close();window.location.reload()}
+  async function save(form:FormData){const response=await fetch(appPath("/api/accounts"),{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({name:String(form.get("name")),username:String(form.get("username")),role:String(form.get("role")),password:String(form.get("password"))})});if(!response.ok){notify("账号创建失败，请检查账号是否重复");return}notify("账号创建成功，首次登录需修改密码");close();window.location.reload()}
   return <form action={save}><div className="modal-title"><h2>创建系统账号</h2><p>当前账号均拥有完整权限；角色用于后续版本权限升级。</p></div>
     <div className="form-grid"><label>姓名<input name="name" required/></label><label>登录账号<input name="username" required/></label>
       <label>身份角色<select name="role"><option>项目经理</option><option>管理员</option></select></label><label>初始密码<input name="password" type="password" minLength={6} required/></label></div>
@@ -874,8 +923,8 @@ function SecurityNotice({user,onConfirm}:{user:CurrentUser;onConfirm:()=>void}){
   </div>;
 }
 function ProfileForm({user,forced,notify,close}:{user:CurrentUser;forced:boolean;notify:(s:string)=>void;close:()=>void}) {
-  async function save(form:FormData){const next=String(form.get("newPassword")),confirm=String(form.get("confirmPassword"));if(next!==confirm){notify("两次输入的新密码不一致");return}const response=await fetch("/api/auth/password",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({oldPassword:String(form.get("oldPassword")),newPassword:next})});const data=await response.json();if(!response.ok){notify(data.error??"密码修改失败");return}notify("密码修改成功，请重新登录");await fetch("/api/auth/logout",{method:"POST"});window.location.href="/login"}
+  async function save(form:FormData){const next=String(form.get("newPassword")),confirm=String(form.get("confirmPassword"));if(next!==confirm){notify("两次输入的新密码不一致");return}const response=await fetch(appPath("/api/auth/password"),{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({oldPassword:String(form.get("oldPassword")),newPassword:next})});const data=await response.json();if(!response.ok){notify(data.error??"密码修改失败");return}notify("密码修改成功，请重新登录");await fetch(appPath("/api/auth/logout"),{method:"POST"});window.location.href=appPath("/login")}
   return <form action={save}><div className="modal-title"><h2>{forced?"首次登录，请修改密码":"个人中心"}</h2><p>{forced?"为保障账号安全，修改临时密码后才能继续使用。":"查看账号信息或修改登录密码。"}</p></div>
     <div className="form-grid"><label>姓名<input disabled value={user.name}/></label><label>登录账号<input disabled value={user.username}/></label><label>当前身份<input disabled value={user.role}/></label><label>原密码<input name="oldPassword" type="password" required/></label><label>新密码<input name="newPassword" type="password" minLength={8} required/></label><label>确认新密码<input name="confirmPassword" type="password" minLength={8} required/></label></div>
-    <div className="modal-actions">{!forced&&<button type="button" onClick={close}>取消</button>}<button type="button" onClick={async()=>{await fetch("/api/auth/logout",{method:"POST"});window.location.href="/login"}}>退出登录</button><button className="primary">保存新密码</button></div></form>;
+    <div className="modal-actions">{!forced&&<button type="button" onClick={close}>取消</button>}<button type="button" onClick={async()=>{await fetch(appPath("/api/auth/logout"),{method:"POST"});window.location.href=appPath("/login")}}>退出登录</button><button className="primary">保存新密码</button></div></form>;
 }
