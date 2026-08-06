@@ -1,0 +1,105 @@
+name: deploy-aliyun
+
+on:
+  workflow_run:
+    workflows: [quality]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pmsys-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    environment: production
+    env:
+      RELEASE_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+      ALIYUN_HOST: ${{ secrets.ALIYUN_HOST }}
+      ALIYUN_SSH_USER: ${{ secrets.ALIYUN_SSH_USER }}
+      ALIYUN_SSH_PORT: ${{ secrets.ALIYUN_SSH_PORT }}
+    steps:
+      - name: Checkout verified release
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_SHA }}
+
+      - name: Verify release belongs to main
+        run: |
+          git fetch --no-tags origin main
+          git merge-base --is-ancestor "$RELEASE_SHA" origin/main
+
+      - name: Use Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Recheck release quality
+        run: |
+          npm ci
+          npm run release:check
+
+      - name: Build immutable production image
+        run: |
+          docker build \
+            --file deploy/Dockerfile.production \
+            --build-arg NEXT_PUBLIC_BASE_PATH=/pmsys \
+            --tag "pmsys:${RELEASE_SHA}" \
+            .
+          docker save "pmsys:${RELEASE_SHA}" | gzip -1 > "/tmp/pmsys-${RELEASE_SHA}.tar.gz"
+
+      - name: Package deployment files
+        run: |
+          tar -czf "/tmp/pmsys-release-${RELEASE_SHA}.tar.gz" \
+            deploy/aliyun-deploy.sh \
+            drizzle
+
+      - name: Configure authenticated SSH
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.ALIYUN_SSH_PRIVATE_KEY }}
+          SSH_KNOWN_HOSTS: ${{ secrets.ALIYUN_SSH_KNOWN_HOSTS }}
+        run: |
+          test -n "$ALIYUN_HOST"
+          test -n "$ALIYUN_SSH_USER"
+          test -n "$SSH_PRIVATE_KEY"
+          test -n "$SSH_KNOWN_HOSTS"
+          [[ "$ALIYUN_HOST" =~ ^[A-Za-z0-9.-]+$ ]]
+          [[ "$ALIYUN_SSH_USER" =~ ^[A-Za-z_][A-Za-z0-9_-]*$ ]]
+          [[ "${ALIYUN_SSH_PORT:-22}" =~ ^[0-9]+$ ]]
+          mkdir -p "$HOME/.ssh"
+          chmod 700 "$HOME/.ssh"
+          printf '%s\n' "$SSH_PRIVATE_KEY" > "$HOME/.ssh/id_ed25519"
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/id_ed25519" "$HOME/.ssh/known_hosts"
+
+      - name: Upload release to ECS
+        run: |
+          ssh_port="${ALIYUN_SSH_PORT:-22}"
+          remote_dir="/opt/pmsys/incoming/${RELEASE_SHA}"
+          ssh -p "$ssh_port" "$ALIYUN_SSH_USER@$ALIYUN_HOST" "mkdir -p '$remote_dir'"
+          scp -P "$ssh_port" \
+            "/tmp/pmsys-${RELEASE_SHA}.tar.gz" \
+            "/tmp/pmsys-release-${RELEASE_SHA}.tar.gz" \
+            "$ALIYUN_SSH_USER@$ALIYUN_HOST:$remote_dir/"
+
+      - name: Deploy with backup, smoke test, and rollback
+        run: |
+          ssh_port="${ALIYUN_SSH_PORT:-22}"
+          remote_dir="/opt/pmsys/incoming/${RELEASE_SHA}"
+          ssh -p "$ssh_port" "$ALIYUN_SSH_USER@$ALIYUN_HOST" \
+            "tar -xzf '$remote_dir/pmsys-release-${RELEASE_SHA}.tar.gz' -C '$remote_dir' && \
+             chmod +x '$remote_dir/deploy/aliyun-deploy.sh' && \
+             RELEASE_SHA='$RELEASE_SHA' \
+             IMAGE_ARCHIVE='$remote_dir/pmsys-${RELEASE_SHA}.tar.gz' \
+             MIGRATIONS_DIR='$remote_dir/drizzle' \
+             '$remote_dir/deploy/aliyun-deploy.sh'"

@@ -37,6 +37,14 @@ npm run lint
 npm test
 ```
 
+本地验收完成、准备提交 PR 前，可一次运行完整发布检查：
+
+```bash
+npm run release:check
+```
+
+PR 合并到 `main` 且 GitHub 质量检查通过后，会自动安全发布到阿里云。配置方法、备份与自动回退机制见 [GitHub → 阿里云自动发布链路](docs/release-pipeline.md)。
+
 ## 数据库
 
 数据库结构与迁移文件位于 `drizzle/`。部署到其他服务器时，需要根据目标数据库和文件存储方案配置等效的 D1/R2 绑定，或改造 `db/index.ts` 与上传接口。

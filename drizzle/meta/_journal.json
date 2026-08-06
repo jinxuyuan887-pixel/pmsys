@@ -85,6 +85,27 @@
       "when": 1785492000000,
       "tag": "0011_task_record_links",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "6",
+      "when": 1786003200000,
+      "tag": "0012_acceptance_payment_closure",
+      "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "6",
+      "when": 1786006800000,
+      "tag": "0013_form_link_remark",
+      "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "6",
+      "when": 1786010400000,
+      "tag": "0014_project_tags",
+      "breakpoints": true
     }
   ]
 }

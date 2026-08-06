@@ -6,6 +6,13 @@ export const projects = sqliteTable("projects", {
   payload: text("payload").notNull(),
   version: integer("version").notNull().default(1),
   archivedAt: text("archived_at"),
+  closedAt: text("closed_at"),
+  closedBy: text("closed_by"),
+  taxRateBasisPoints: integer("tax_rate_basis_points"),
+  taxAmount: integer("tax_amount"),
+  finalRevenue: integer("final_revenue"),
+  finalCost: integer("final_cost"),
+  finalProfit: integer("final_profit"),
   isDemo: integer("is_demo", { mode: "boolean" }).notNull().default(false),
   updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
 });
@@ -45,6 +52,9 @@ export const serviceRecords = sqliteTable("service_records", {
   costUnitSnapshot: integer("cost_unit_snapshot"),
   costAmountSnapshot: integer("cost_amount_snapshot"),
   profitRateBasisPoints: integer("profit_rate_basis_points"),
+  paymentStatus: text("payment_status").notNull().default("待支付"),
+  paidAt: text("paid_at"),
+  paidBy: text("paid_by"),
   deletedAt: text("deleted_at"),
   deletedBy: text("deleted_by"),
   createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
@@ -58,6 +68,7 @@ export const formLinks = sqliteTable("form_links", {
   projectId: integer("project_id").notNull(),
   serviceId: integer("service_id").notNull(),
   formType: text("form_type").notNull(),
+  remark: text("remark").notNull().default(""),
   expiresAt: text("expires_at"),
   maxSubmissions: integer("max_submissions").notNull().default(1),
   submissionCount: integer("submission_count").notNull().default(0),
@@ -75,6 +86,8 @@ export const fileAttachments = sqliteTable("file_attachments", {
   uploadedBy: text("uploaded_by").notNull(),
   formToken: text("form_token"),
   recordId: integer("record_id"),
+  projectId: integer("project_id"),
+  category: text("category"),
   deletedAt: text("deleted_at"),
   createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
 });
@@ -115,6 +128,13 @@ export const serviceCatalog = sqliteTable("service_catalog", {
   name: text("name").notNull().unique(),
   defaultUnit: text("default_unit").notNull().default("场"),
   category: text("category").notNull().default("其他服务"),
+  enabled: integer("enabled", { mode: "boolean" }).notNull().default(true),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+});
+
+export const projectTags = sqliteTable("project_tags", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  name: text("name").notNull().unique(),
   enabled: integer("enabled", { mode: "boolean" }).notNull().default(true),
   createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
 });
