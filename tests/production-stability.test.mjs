@@ -100,7 +100,8 @@ test("task management supports CRUD filters and service record links", async () 
   assert.match(route, /export async function POST/);
   assert.match(route, /export async function PATCH/);
   assert.match(route, /export async function DELETE/);
-  assert.match(route, /已完成任务必须至少关联一条服务记录/);
+  assert.match(route, /derivedTaskStatus/);
+  assert.match(route, /\["已验收","已完成"\]/);
   assert.match(route, /只能关联同一项目、同一服务下的有效服务记录/);
   assert.match(migration, /delivery_task_records/);
 });
@@ -123,19 +124,19 @@ test("external link dialog omits the redundant pending-review control", async ()
   assert.doesNotMatch(dashboard, /提交后进入待审核状态/);
   assert.match(dashboard, /提交后自动归集并进入待审核/);
   assert.match(dashboard, /className="full">允许提交次数/);
-  assert.match(recordsRoute, /body\.token\?"待审核":"已完成"/);
+  assert.match(recordsRoute, /body\.token\?"待审核":"待验收"/);
 });
 
 test("consultant aggregation uses approved provider records and frozen cost prices", async () => {
   const dashboard = await read("app/ui/DashboardApp.tsx");
   assert.match(dashboard, /\["consultants", "♧", "咨询师归集"\]/);
   assert.match(dashboard, /function Consultants/);
-  assert.match(dashboard, /record\.status==="已完成"/);
+  assert.match(dashboard, /records\.filter\(isAcceptedRecord\)/);
   assert.match(dashboard, /record\.payload\.data\?\.provider/);
   assert.match(dashboard, /consultantCost\(record\)/);
   assert.match(dashboard, /materialCost\(record\)/);
   assert.match(dashboard, /record\.costAmountSnapshot/);
-  assert.match(dashboard, /同一咨询师的不同服务、不同审核价格分别归集/);
+  assert.match(dashboard, /同一咨询师的不同服务、不同验收成本分别归集/);
   assert.match(dashboard, /输入姓名模糊搜索/);
 });
 
@@ -210,4 +211,24 @@ test("external forms show consultation fields only for consultation services", a
   assert.match(route, /validateExternalService\(target\.service\.name,body\.data\)/);
   assert.match(route, /type=recordTypeForService\(target\.service\.name,type\)/);
   assert.match(route, /咨询时长必须大于0且不超过1440分钟/);
+});
+
+test("P0 acceptance, payment, automatic totals, and project closure are enforced", async () => {
+  const dashboard = await read("app/ui/DashboardApp.tsx");
+  const projectRoute = await read("app/api/projects/route.ts");
+  const recordsRoute = await read("app/api/records/route.ts");
+  const uploadRoute = await read("app/api/upload/route.ts");
+  const migration = await read("drizzle/0012_acceptance_payment_closure.sql");
+  assert.match(dashboard, /function ProjectClosureDialog/);
+  assert.match(dashboard, /验收后更新项目进度/);
+  assert.match(dashboard, /确认支付/);
+  assert.match(projectRoute, /action==="close"/);
+  assert.match(projectRoute, /taxRateBasisPoints=600/);
+  assert.match(projectRoute, /已验收记录成本未支付/);
+  assert.match(recordsRoute, /action==="payment"/);
+  assert.match(recordsRoute, /refreshLinkedTasks/);
+  assert.match(uploadRoute, /成果报告/);
+  assert.match(uploadRoute, /客户评价/);
+  assert.match(migration, /payment_status/);
+  assert.match(migration, /closed_at/);
 });

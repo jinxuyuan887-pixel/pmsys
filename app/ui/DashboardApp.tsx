@@ -19,7 +19,7 @@ type Project = {
   name: string;
   manager: string;
   managerIds?: number[];
-  status: "执行中" | "待启动" | "已完成";
+  status: "执行中" | "待启动" | "待结项" | "已结项" | "已完成";
   risk: "正常" | "预警" | "风险";
   start: string;
   end: string;
@@ -28,6 +28,13 @@ type Project = {
   services: Service[];
   _version?: number;
   _archivedAt?: string|null;
+  _closedAt?: string|null;
+  _closedBy?: string|null;
+  _taxRateBasisPoints?:number|null;
+  _taxAmount?:number|null;
+  _finalRevenue?:number|null;
+  _finalCost?:number|null;
+  _finalProfit?:number|null;
   _isDemo?: boolean;
 };
 
@@ -36,6 +43,7 @@ type ServiceRecord = {
   id:number;projectId:number;serviceId:number;recordType:string;status:string;createdAt:string;updatedAt?:string;approvedAt?:string|null;
   unitPriceSnapshot?:number|null;amountSnapshot?:number|null;
   costUnitSnapshot?:number|null;costAmountSnapshot?:number|null;profitRateBasisPoints?:number|null;
+  paymentStatus?:string;paidAt?:string|null;paidBy?:string|null;
   payload:{data?:Record<string,unknown>;uploaded?:string[];type?:string};
 };
 type DeliveryTask={
@@ -85,8 +93,9 @@ function isProjectFinished(project:Project){
   return project.services.length>0?project.services.every(service=>service.quantity>0&&service.completed>=service.quantity):project.status==="已完成";
 }
 function withAutomaticStatus(project:Project):Project{
-  if(isProjectFinished(project))return {...project,status:"已完成"};
-  return project.status==="已完成"?{...project,status:"执行中"}:project;
+  if(project._closedAt||project.status==="已结项")return {...project,status:"已结项"};
+  if(isProjectFinished(project))return {...project,status:"待结项"};
+  return ["已完成","待结项"].includes(project.status)?{...project,status:"执行中"}:project;
 }
 function projectHasManager(project:Project,manager:string){
   return project.manager.split("、").map(name=>name.trim()).includes(manager);
@@ -99,6 +108,7 @@ const recordStartDate=(data?:Record<string,unknown>)=>String(data?.startDate??da
 const recordEndDate=(data?:Record<string,unknown>)=>String(data?.endDate??data?.startDate??data?.date??"");
 const consultantCost=(record:ServiceRecord)=>Number(record.payload.data?.consultantCostUnit??record.payload.data?.costUnit??record.costUnitSnapshot??0);
 const materialCost=(record:ServiceRecord)=>Number(record.payload.data?.materialCostUnit??0);
+const isAcceptedRecord=(record:ServiceRecord)=>["已验收","已完成"].includes(record.status);
 
 async function copyText(text:string){
   try{
@@ -126,7 +136,7 @@ export default function DashboardApp({currentUser}:{currentUser:CurrentUser}) {
   const [page, setPage] = useState("dashboard");
   const [projects, setProjects] = useState<Project[]>([]);
   const [selectedId, setSelectedId] = useState<number | null>(null);
-  const [modal, setModal] = useState<"project" | "service" | "link" | "managerRecord" | "viewRecord" | "reviewRecord" | "editRecord" | "account" | "profile" | "securityNotice" | "catalog" | null>(currentUser.mustChangePassword?"securityNotice":null);
+  const [modal, setModal] = useState<"project" | "service" | "link" | "managerRecord" | "viewRecord" | "reviewRecord" | "editRecord" | "closeProject" | "account" | "profile" | "securityNotice" | "catalog" | null>(currentUser.mustChangePassword?"securityNotice":null);
   const [catalog,setCatalog]=useState<ServiceTemplate[]>(defaultCatalog);
   const [projectManagerAccounts,setProjectManagerAccounts]=useState<ProjectManagerAccount[]>([]);
   const [records,setRecords]=useState<ServiceRecord[]>([]);
@@ -142,11 +152,11 @@ export default function DashboardApp({currentUser}:{currentUser:CurrentUser}) {
   const selected = projects.find((p) => p.id === selectedId) ?? null;
   const frozenAmountProgress=(project:Project)=>{
     const total=project.services.reduce((sum,item)=>sum+item.quantity*item.unitPrice,0);
-    const delivered=records.filter(record=>record.projectId===project.id&&record.status==="已完成").reduce((sum,record)=>sum+(record.amountSnapshot??0),0);
+    const delivered=records.filter(record=>record.projectId===project.id&&isAcceptedRecord(record)).reduce((sum,record)=>sum+(record.amountSnapshot??0),0);
     return total?Math.round(delivered/total*100):0;
   };
   const projectFinance=(project:Project)=>{
-    const approved=records.filter(record=>record.projectId===project.id&&record.status==="已完成");
+    const approved=records.filter(record=>record.projectId===project.id&&isAcceptedRecord(record));
     const revenue=approved.reduce((sum,record)=>sum+(record.amountSnapshot??0),0);
     const cost=approved.reduce((sum,record)=>sum+(record.costAmountSnapshot??0),0);
     const missingCost=approved.some(record=>record.costAmountSnapshot===null||record.costAmountSnapshot===undefined);
@@ -221,14 +231,6 @@ export default function DashboardApp({currentUser}:{currentUser:CurrentUser}) {
     setModal("project");
   }
 
-  async function deleteProject(id: number) {
-    if (!window.confirm("确认归档这个项目吗？归档后不再进入日常统计，项目、服务记录和附件仍将长期保留。")) return;
-    const response=await fetch(appPath(`/api/projects?id=${id}`),{method:"DELETE"});
-    if(!response.ok){notify("项目归档失败，请刷新后重试");return}
-    await refreshProjects();
-    if (selectedId === id) setSelectedId(null);
-    notify("项目已归档，历史交付明细已保留");
-  }
   async function restoreProject(id:number){
     const response=await fetch(appPath("/api/projects"),{method:"PATCH",headers:{"content-type":"application/json"},body:JSON.stringify({action:"restore",id})});
     if(!response.ok){notify("项目恢复失败，请重试");return}
@@ -274,7 +276,7 @@ export default function DashboardApp({currentUser}:{currentUser:CurrentUser}) {
       managerIds: form.getAll("managerIds").map(Number).filter(Number.isSafeInteger),
       manager: projectManagerAccounts.filter(manager=>form.getAll("managerIds").map(Number).includes(manager.id)).map(manager=>manager.name).join("、"),
       contract: String(form.get("contract")),
-      total: Number(form.get("total")) || submittedServices.reduce((sum, item) => sum + item.quantity * item.unitPrice, 0),
+      total: submittedServices.reduce((sum, item) => sum + item.quantity * item.unitPrice, 0),
       start: String(form.get("start")),
       end: String(form.get("end")),
       status: String(form.get("status")) as Project["status"],
@@ -314,7 +316,7 @@ export default function DashboardApp({currentUser}:{currentUser:CurrentUser}) {
     for(const file of form.getAll("files")){
       if(file instanceof File&&file.size>0){const upload=new FormData();upload.append("file",file);const response=await fetch(appPath("/api/upload"),{method:"POST",body:upload});if(response.ok){const data=await response.json();uploaded.push(data.key)}}
     }
-    const payload={source:"项目经理填写",projectId,serviceId,recordType:String(form.get("recordType")),provider:String(form.get("provider")),startDate:String(form.get("startDate")),endDate:String(form.get("endDate")),quantity,consultantCostUnit:Number(form.get("consultantCostUnit")),materialCostUnit:Number(form.get("materialCostUnit")),summary:String(form.get("summary")),status:"已完成"};
+    const payload={source:"项目经理填写",projectId,serviceId,recordType:String(form.get("recordType")),provider:String(form.get("provider")),startDate:String(form.get("startDate")),endDate:String(form.get("endDate")),quantity,consultantCostUnit:Number(form.get("consultantCostUnit")),materialCostUnit:Number(form.get("materialCostUnit")),summary:String(form.get("summary")),status:"待验收"};
     const response=await fetch(appPath("/api/records"),{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({type:payload.recordType,data:payload,uploaded})}).catch(()=>null);
     if(!response?.ok){const data=await response?.json().catch(()=>({})) as {error?:string}|undefined;notify(data?.error??"服务记录保存失败，项目进度未变更");return}
     const result=await response.json() as {record?:ServiceRecord};
@@ -331,19 +333,36 @@ export default function DashboardApp({currentUser}:{currentUser:CurrentUser}) {
     setModal(null);
     setTaskRecordTarget(null);
     await Promise.all([refreshRecords(),refreshProjects()]);
-    notify(taskRecordTarget?"服务记录已保存并关联任务":"服务记录已保存，项目进度已更新");
+    notify(taskRecordTarget?"服务记录已保存并关联任务，待验收后自动完成":"服务记录已保存，待验收后更新项目进度");
   }
 
   async function saveEditedRecord(form:FormData){
     if(!editingRecord)return;
     const projectId=Number(form.get("projectId")),serviceId=Number(form.get("serviceId")),quantity=Number(form.get("quantity"))||1;
-    const oldQuantity=Number(editingRecord.payload.data?.quantity??1),wasCompleted=editingRecord.status==="已完成";
+    const oldQuantity=Number(editingRecord.payload.data?.quantity??1),wasCompleted=isAcceptedRecord(editingRecord);
     const consultantCostValue=form.get("consultantCostUnit"),materialCostValue=form.get("materialCostUnit");
     const data={...editingRecord.payload.data,projectId,serviceId,recordType:String(form.get("recordType")),provider:String(form.get("provider")),startDate:String(form.get("startDate")),endDate:String(form.get("endDate")),quantity,...(consultantCostValue!==null&&String(consultantCostValue)!==""?{consultantCostUnit:Number(consultantCostValue)}:{}),...(materialCostValue!==null&&String(materialCostValue)!==""?{materialCostUnit:Number(materialCostValue)}:{}),summary:String(form.get("summary"))};
     const response=await fetch(appPath("/api/records"),{method:"PATCH",headers:{"content-type":"application/json"},body:JSON.stringify({id:editingRecord.id,type:String(form.get("recordType")),data})});
     if(!response.ok){notify("记录修改失败，请重试");return}
     void oldQuantity;void wasCompleted;
-    setModal(null);setEditingRecord(null);await Promise.all([refreshRecords(),refreshProjects()]);notify("服务记录已修改，冻结金额与项目进度已同步更新");
+    setModal(null);setEditingRecord(null);await Promise.all([refreshRecords(),refreshProjects()]);notify("服务记录已修改，金额与相关状态已同步更新");
+  }
+
+  async function acceptRecord(record:ServiceRecord){
+    if(!window.confirm("确认该服务记录已达到交付标准并验收通过吗？"))return;
+    const response=await fetch(appPath("/api/records"),{method:"PATCH",headers:{"content-type":"application/json"},body:JSON.stringify({id:record.id,status:"已验收"})});
+    const data=await response.json().catch(()=>({})) as {error?:string};
+    if(!response.ok){notify(data.error??"验收失败，请重试");return}
+    await Promise.all([refreshRecords(),refreshProjects()]);notify("服务记录已验收，关联任务状态已自动更新");
+  }
+
+  async function togglePayment(record:ServiceRecord){
+    const next=record.paymentStatus==="已支付"?"待支付":"已支付";
+    if(!window.confirm(next==="已支付"?"确认该条服务成本已经支付吗？":"确认撤销该条成本的已支付标记吗？"))return;
+    const response=await fetch(appPath("/api/records"),{method:"PATCH",headers:{"content-type":"application/json"},body:JSON.stringify({id:record.id,action:"payment",paymentStatus:next})});
+    const data=await response.json().catch(()=>({})) as {error?:string};
+    if(!response.ok){notify(data.error??"支付状态更新失败");return}
+    await refreshRecords();notify(next==="已支付"?"成本已标记为已支付":"已恢复为待支付");
   }
 
   return (
@@ -385,13 +404,13 @@ export default function DashboardApp({currentUser}:{currentUser:CurrentUser}) {
                     <span className="project-name">{p.name}{p._isDemo&&<small className="demo-tag">示例</small>}</span><span>{p.manager}</span>
                     <Progress value={timeProgress(p)} />
                     <Progress value={projectProgress(p)} green />
-                    <Status value={isProjectFinished(p)?"已完成":p.status} />
+                    <Status value={p._closedAt?"已结项":isProjectFinished(p)?"待结项":p.status} />
                   </button>)}
                 </div>
               </Panel>
               <Panel title="最新服务记录" action="查看全部" onAction={() => setPage("records")} wide>
                 <div className="recent-list">
-                  {records.slice(0,4).map(record=>{const project=projects.find(item=>item.id===record.projectId),service=project?.services.find(item=>item.id===record.serviceId);return <div key={record.id}><span><strong>{service?.name??record.recordType}｜{String(record.payload.data?.provider??"未填写")}</strong><small>{String(record.payload.data?.date??record.createdAt.slice(0,10))} · {project?.name??"对应项目"}</small></span><Status value={record.status==="已完成"?"已交付":record.status}/></div>})}
+                  {records.slice(0,4).map(record=>{const project=projects.find(item=>item.id===record.projectId),service=project?.services.find(item=>item.id===record.serviceId);return <div key={record.id}><span><strong>{service?.name??record.recordType}｜{String(record.payload.data?.provider??"未填写")}</strong><small>{String(record.payload.data?.date??record.createdAt.slice(0,10))} · {project?.name??"对应项目"}</small></span><Status value={isAcceptedRecord(record)?"已验收":record.status}/></div>})}
                   {!records.length&&<div><span><strong>暂无服务记录</strong><small>完成内部填写或外部提交后将在这里显示</small></span></div>}
                 </div>
               </Panel>
@@ -406,11 +425,11 @@ export default function DashboardApp({currentUser}:{currentUser:CurrentUser}) {
             <div className="tabs project-tabs"><button className={projectView==="all"?"active":""} onClick={()=>setProjectView("all")}>全部项目 {managerScopedProjects.filter(p=>!p._archivedAt).length}</button><button className={projectView==="active"?"active":""} onClick={()=>setProjectView("active")}>进行中 {managerScopedProjects.filter(project=>!project._archivedAt&&!isProjectFinished(project)).length}</button><button className={projectView==="finished"?"active":""} onClick={()=>setProjectView("finished")}>已结束 {managerScopedProjects.filter(project=>!project._archivedAt&&isProjectFinished(project)).length}</button><button className={projectView==="archived"?"active":""} onClick={()=>setProjectView("archived")}>已归档 {managerScopedProjects.filter(project=>project._archivedAt).length}</button></div>
             <div className="project-cards">
               {visibleProjects.map((p)=><article key={p.id} onClick={()=>setSelectedId(p.id)}>
-                <div className="card-head"><Status value={isProjectFinished(p)?"已完成":p.status}/><button onClick={(e)=>{e.stopPropagation(); openProject(p)}}>•••</button></div>
+                <div className="card-head"><Status value={p._closedAt?"已结项":isProjectFinished(p)?"待结项":p.status}/>{!p._archivedAt&&<button onClick={(e)=>{e.stopPropagation(); openProject(p)}}>•••</button>}</div>
                 <h3>{p.name} {p._isDemo&&<small className="demo-tag">示例数据</small>}</h3><p>{p.contract} · 项目经理：{p.manager}</p>
                 <div className="big-progress"><span><b>服务进度</b><strong>{projectProgress(p)}%</strong></span><Progress value={projectProgress(p)} green/></div>
-                <div className="card-stats"><span>项目总价<strong>{money(p.total)}</strong></span><span>服务项<strong>{p.services.length}</strong></span><span>{isProjectFinished(p)?"项目状态":"剩余天数"}<strong>{isProjectFinished(p)?"已结束":p.status==="待启动"?"未开始":`${remainingDays(p)}天`}</strong></span></div>
-                <div className="card-foot"><span>{p.start} — {p.end}</span><span>{p._archivedAt?<button onClick={(e)=>{e.stopPropagation();restoreProject(p.id)}}>恢复项目</button>:<><button onClick={(e)=>{e.stopPropagation();openProject(p)}}>编辑</button><button className="danger-text" onClick={(e)=>{e.stopPropagation();deleteProject(p.id)}}>归档</button></>}</span></div>
+                <div className="card-stats"><span>项目总价<strong>{money(p.total)}</strong></span><span>服务项<strong>{p.services.length}</strong></span><span>{p._closedAt?"项目状态":isProjectFinished(p)?"结项状态":"剩余天数"}<strong>{p._closedAt?"已结项":isProjectFinished(p)?"待结项":p.status==="待启动"?"未开始":`${remainingDays(p)}天`}</strong></span></div>
+                <div className="card-foot"><span>{p.start} — {p.end}</span><span>{p._archivedAt?(p._closedAt?<span>已结项归档</span>:<button onClick={(e)=>{e.stopPropagation();restoreProject(p.id)}}>恢复项目</button>):<><button onClick={(e)=>{e.stopPropagation();openProject(p)}}>编辑</button>{isProjectFinished(p)&&<button className="primary" onClick={(e)=>{e.stopPropagation();setSelectedId(p.id);setModal("closeProject")}}>结项</button>}</>}</span></div>
               </article>)}
               {visibleProjects.length===0&&<div className="empty-records project-empty"><strong>{projectView==="finished"?"暂无已结束项目":"当前条件下暂无项目"}</strong><span>{projectView==="finished"?"所有服务任务完成后，项目会自动归集到这里，交付明细仍可随时查看。":"可以调整筛选条件或新建项目。"}</span></div>}
             </div>
@@ -420,7 +439,7 @@ export default function DashboardApp({currentUser}:{currentUser:CurrentUser}) {
         {selected && (
           <section className="detail-layout">
             <button className="back" onClick={()=>setSelectedId(null)}>← 返回项目列表</button>
-            {selected._archivedAt&&<div className="catalog-note">该项目已归档，目前仅供查看。如需继续交付，请先在“已归档”清单中恢复项目。</div>}
+            {selected._archivedAt&&<div className="catalog-note">{selected._closedAt?`该项目已于 ${new Date(selected._closedAt).toLocaleDateString("zh-CN")} 结项归档。税费 ${money(selected._taxAmount??0)}，最终利润 ${money(selected._finalProfit??0)}。`:"该项目已归档，目前仅供查看。如需继续交付，请先在“已归档”清单中恢复项目。"}</div>}
             <div className="detail-summary">
               <div><small>项目总价</small><strong>{money(selected.total)}</strong></div>
               <div><small>服务执行进度</small><strong>{projectProgress(selected)}%</strong></div>
@@ -433,7 +452,7 @@ export default function DashboardApp({currentUser}:{currentUser:CurrentUser}) {
               <div><span>时间进度</span><strong>{timeProgress(selected)}%</strong><small>已过项目天数 ÷ 项目总天数</small></div>
               <div><span>剩余服务数量</span><strong>{selected.services.reduce((sum,service)=>sum+Math.max(0,service.quantity-service.completed),0)}</strong><small>合同数量减去已审核交付数量</small></div>
             </div>
-            <div className="section-title"><div><h2>项目服务内容</h2><p>不同客户的服务数量、单位和单价均可独立配置</p></div>{!selected._archivedAt&&<button className="primary" onClick={()=>setModal("service")}>＋ 添加服务</button>}</div>
+            <div className="section-title"><div><h2>项目服务内容</h2><p>不同客户的服务数量、单位和单价均可独立配置</p></div>{!selected._archivedAt&&<span className="section-actions"><button onClick={()=>setModal("service")}>＋ 添加服务</button>{isProjectFinished(selected)&&<button className="primary" onClick={()=>setModal("closeProject")}>项目结项</button>}</span>}</div>
             <div className="service-table">
               <div className="service-row heading"><span>服务内容</span><span>计量方式</span><span>单价</span><span>合同金额</span><span>执行进度</span><span>操作</span></div>
               {selected.services.map((s)=><div className="service-row" key={s.id}>
@@ -445,8 +464,8 @@ export default function DashboardApp({currentUser}:{currentUser:CurrentUser}) {
           </section>
         )}
 
-        {page === "records" && !selected && <Records records={records} projects={projects.filter(project=>!project._archivedAt)} managerFilter={managerFilter} onManagerFilterChange={setManagerFilter} refresh={async()=>{await Promise.all([refreshRecords(),refreshProjects()])}} notify={notify} onManagerRecord={()=>setModal("managerRecord")} onLink={()=>setModal("link")} onView={(record)=>{setViewingRecord(record);setModal("viewRecord")}} onReview={(record)=>{setReviewingRecord(record);setModal("reviewRecord")}} onEdit={(record)=>{setEditingRecord(record);setModal("editRecord")}}/>}
-        {page === "tasks" && !selected && <TaskManagement projects={projects.filter(project=>!project._archivedAt)} records={records} currentUser={currentUser} managers={projectManagerAccounts} notify={notify} onAddRecord={task=>{setTaskRecordTarget(task);setModal("managerRecord")}} onReview={record=>{setReviewingRecord(record);setModal("reviewRecord")}} onView={record=>{setViewingRecord(record);setModal("viewRecord")}}/>}
+        {page === "records" && !selected && <Records records={records} projects={projects.filter(project=>!project._archivedAt)} managerFilter={managerFilter} onManagerFilterChange={setManagerFilter} refresh={async()=>{await Promise.all([refreshRecords(),refreshProjects()])}} notify={notify} onManagerRecord={()=>setModal("managerRecord")} onLink={()=>setModal("link")} onView={(record)=>{setViewingRecord(record);setModal("viewRecord")}} onReview={(record)=>{setReviewingRecord(record);setModal("reviewRecord")}} onAccept={acceptRecord} onPayment={togglePayment} onEdit={(record)=>{setEditingRecord(record);setModal("editRecord")}}/>}
+        {page === "tasks" && !selected && <TaskManagement projects={projects.filter(project=>!project._archivedAt)} records={records} currentUser={currentUser} managers={projectManagerAccounts} notify={notify} onAddRecord={task=>{setTaskRecordTarget(task);setModal("managerRecord")}} onReview={record=>{setReviewingRecord(record);setModal("reviewRecord")}} onAccept={acceptRecord} onView={record=>{setViewingRecord(record);setModal("viewRecord")}}/>}
         {page === "consultants" && !selected && <Consultants records={records} projects={projects} onView={(record)=>{setViewingRecord(record);setModal("viewRecord")}}/>}
         {page === "links" && !selected && <ExternalLinks projects={projects} notify={notify} onAdd={()=>setModal("link")}/>}
         {page === "governance" && !selected && <Governance/>}
@@ -464,6 +483,7 @@ export default function DashboardApp({currentUser}:{currentUser:CurrentUser}) {
           {modal === "viewRecord" && viewingRecord && <ViewRecordDialog record={viewingRecord} projects={projects} close={()=>{setModal(null);setViewingRecord(null)}}/>}
           {modal === "reviewRecord" && reviewingRecord && <ReviewRecordDialog record={reviewingRecord} projects={projects} notify={notify} close={()=>{setModal(null);setReviewingRecord(null)}} onApproved={async()=>{setModal(null);setReviewingRecord(null);await Promise.all([refreshRecords(),refreshProjects()])}}/>}
           {modal === "editRecord" && editingRecord && <EditRecordForm record={editingRecord} projects={projects.filter(project=>!project._archivedAt)} onSave={saveEditedRecord} close={()=>{setModal(null);setEditingRecord(null)}}/>}
+          {modal === "closeProject" && selected && <ProjectClosureDialog project={selected} records={records.filter(record=>record.projectId===selected.id)} notify={notify} close={()=>setModal(null)} onClosed={async()=>{setModal(null);setSelectedId(null);await Promise.all([refreshProjects(),refreshRecords()]);setPage("projects")}}/>}
           {modal === "account" && <AccountForm notify={notify} close={()=>setModal(null)}/>}
           {modal === "profile" && <ProfileForm user={currentUser} forced={currentUser.mustChangePassword} notify={notify} close={()=>setModal(null)}/>}
           {modal === "securityNotice" && <SecurityNotice user={currentUser} onConfirm={()=>setModal("profile")}/>}
@@ -485,7 +505,7 @@ function Progress({value,green}:{value:number;green?:boolean}) {
   return <span className={`progress ${green?"green":""}`}><i><b style={{width:`${value}%`}}/></i><em>{value}%</em></span>;
 }
 function Status({value}:{value:string}) {
-  const kind = ["风险","已退回"].includes(value)?"red":["预警","待审核"].includes(value)?"amber":["已完成","已交付","执行中","正常"].includes(value)?"green":"blue";
+  const kind = ["风险","已退回"].includes(value)?"red":["预警","待审核","待验收","待支付","待结项"].includes(value)?"amber":["已完成","已交付","已验收","已支付","已结项","执行中","正常"].includes(value)?"green":"blue";
   return <span className={`status ${kind}`}>{value}</span>;
 }
 
@@ -508,7 +528,7 @@ function ProjectForm({editing,catalog,projectManagers,currentUser,onSave}:{editi
     <div className="form-grid"><label className="full">项目名称<input name="name" required defaultValue={editing?.name}/></label>
       <label>合同编号<input name="contract" required defaultValue={editing?.contract}/></label>
       <div className="manager-picker"><span>项目经理</span><small>可多选；项目经理新建时默认选择本人</small><div>{projectManagers.map(manager=><label key={manager.id}><input type="checkbox" name="managerIds" value={manager.id} checked={selectedManagerIds.includes(manager.id)} onChange={event=>setSelectedManagerIds(ids=>event.target.checked?[...ids,manager.id]:ids.filter(id=>id!==manager.id))}/><span><strong>{manager.name}</strong><small>@{manager.username}</small></span></label>)}</div>{!projectManagers.length&&<em>暂无启用中的项目经理账号，请先在账号管理中创建或启用。</em>}{projectManagers.length>0&&!selectedManagerIds.length&&<em>请至少选择一位项目经理</em>}</div>
-      <label>项目总价（元）<input name="total" type="number" placeholder={`留空则按服务合计 ${serviceTotal} 元`} defaultValue={editing?.total}/></label><label>项目状态<select name="status" defaultValue={editing?.status}><option>执行中</option><option>待启动</option><option>已完成</option></select></label>
+      <label>项目总价（自动计算）<input type="text" disabled value={money(serviceTotal)}/></label><label>项目状态<select name="status" defaultValue={["待启动","执行中"].includes(editing?.status??"")?editing?.status:"执行中"}><option>执行中</option><option>待启动</option></select></label>
       <label>开始日期<input name="start" type="date" required defaultValue={editing?.start}/></label><label>结束日期<input name="end" type="date" required defaultValue={editing?.end}/></label>
       <label>合同文件（选填）<input type="file" accept=".pdf,.doc,.docx"/></label>
       <div className="full service-builder">
@@ -646,9 +666,9 @@ function LinkDialog({projects,selectedProjectId,notify,close}:{projects:Project[
   </form>;
 }
 
-function TaskManagement({projects,records,currentUser,managers,notify,onAddRecord,onReview,onView}:{
+function TaskManagement({projects,records,currentUser,managers,notify,onAddRecord,onReview,onAccept,onView}:{
   projects:Project[];records:ServiceRecord[];currentUser:CurrentUser;managers:ProjectManagerAccount[];
-  notify:(message:string)=>void;onAddRecord:(task:DeliveryTask)=>void;onReview:(record:ServiceRecord)=>void;onView:(record:ServiceRecord)=>void;
+  notify:(message:string)=>void;onAddRecord:(task:DeliveryTask)=>void;onReview:(record:ServiceRecord)=>void;onAccept:(record:ServiceRecord)=>void;onView:(record:ServiceRecord)=>void;
 }){
   const [tasks,setTasks]=useState<DeliveryTask[]>([]);
   const [status,setStatus]=useState<"all"|"completed"|"incomplete">("all");
@@ -680,7 +700,7 @@ function TaskManagement({projects,records,currentUser,managers,notify,onAddRecor
   }
   const completed=tasks.filter(task=>task.status==="已完成").length;
   return <section className="content-card task-management">
-    <div className="section-title"><div><h2>项目经理任务管理</h2><p>任务可关联多条服务记录；独立服务记录填写和审核入口仍然保留</p></div><button className="primary" onClick={()=>{setEditing(null);setShowForm(true)}}>＋ 新增任务</button></div>
+    <div className="section-title"><div><h2>项目经理任务管理</h2><p>关联记录验收数量达到计划数量后，任务自动完成</p></div><button className="primary" onClick={()=>{setEditing(null);setShowForm(true)}}>＋ 新增任务</button></div>
     <div className="task-summary"><div><small>当前列表</small><strong>{tasks.length}</strong></div><div><small>已完成</small><strong>{completed}</strong></div><div><small>未完成</small><strong>{tasks.length-completed}</strong></div><div><small>待审核关联记录</small><strong>{tasks.reduce((sum,task)=>sum+taskRecords(task).filter(record=>record.status==="待审核").length,0)}</strong></div></div>
     <div className="task-filters">
       <label>完成状态<select value={status} onChange={event=>setStatus(event.target.value as typeof status)}><option value="all">全部任务</option><option value="incomplete">未完成</option><option value="completed">已完成</option></select></label>
@@ -690,12 +710,12 @@ function TaskManagement({projects,records,currentUser,managers,notify,onAddRecor
     </div>
     <div className="task-list">
       {tasks.map(task=>{
-        const project=projectFor(task),service=serviceFor(task),linked=taskRecords(task),pending=linked.filter(record=>record.status==="待审核");
+        const project=projectFor(task),service=serviceFor(task),linked=taskRecords(task),pending=linked.filter(record=>["待审核","待验收"].includes(record.status));
         return <article className="task-card" key={task.id}>
           <div className="task-card-main"><Status value={task.status}/><span><strong>{task.title}</strong><small>{project?.name??"项目已归档"} · {service?.name??"服务不存在"}{service?.contractDetail?` · ${service.contractDetail}`:""}</small></span><time>{task.plannedDate||"未设置日期"}</time></div>
           {task.description&&<p>{task.description}</p>}
-          <div className="task-meta"><span>负责人<strong>{task.owner||"未分配"}</strong></span><span>计划数量<strong>{task.plannedQuantity} {service?.unit??""}</strong></span><span>关联记录<strong>{linked.length} 条</strong></span><span>交付状态<strong>{linked.filter(record=>record.status==="已完成").length} 已完成 / {pending.length} 待审核</strong></span></div>
-          {linked.length>0&&<div className="task-records">{linked.map(record=><div key={record.id}><span><strong>{record.recordType}</strong><small>{String(record.payload.data?.date??record.createdAt.slice(0,10))} · {String(record.payload.data?.provider??"未填写服务人员")}</small></span><Status value={record.status==="已完成"?"已交付":record.status}/><button onClick={()=>onView(record)}>查看</button>{record.status==="待审核"&&<button className="review-task-record" onClick={()=>onReview(record)}>审核</button>}</div>)}</div>}
+          <div className="task-meta"><span>负责人<strong>{task.owner||"未分配"}</strong></span><span>计划数量<strong>{task.plannedQuantity} {service?.unit??""}</strong></span><span>关联记录<strong>{linked.length} 条</strong></span><span>交付状态<strong>{linked.filter(isAcceptedRecord).length} 已验收 / {pending.length} 待处理</strong></span></div>
+          {linked.length>0&&<div className="task-records">{linked.map(record=><div key={record.id}><span><strong>{record.recordType}</strong><small>{String(record.payload.data?.date??record.createdAt.slice(0,10))} · {String(record.payload.data?.provider??"未填写服务人员")}</small></span><Status value={isAcceptedRecord(record)?"已验收":record.status}/><button onClick={()=>onView(record)}>查看</button>{record.status==="待审核"&&<button className="review-task-record" onClick={()=>onReview(record)}>审核</button>}{record.status==="待验收"&&<button className="review-task-record" onClick={()=>onAccept(record)}>验收</button>}</div>)}</div>}
           <div className="task-actions"><button className="primary" onClick={()=>onAddRecord(task)}>＋ 新增服务记录</button><button onClick={()=>{setEditing(task);setShowForm(true)}}>编辑任务</button><button className="danger-text" onClick={()=>remove(task)}>删除任务</button></div>
         </article>;
       })}
@@ -720,7 +740,7 @@ function TaskForm({editing,projects,records,managers,currentUser,onSave,close}:{
     onSave({
       id:editing?.id,projectId,serviceId,title:String(form.get("title")),description:String(form.get("description")),
       plannedQuantity:Number(form.get("plannedQuantity")),plannedDate:String(form.get("plannedDate")),owner:String(form.get("owner")),
-      status:String(form.get("status")),recordIds
+      status:"未完成",recordIds
     });
   }
   return <form action={submit}><div className="modal-title"><h2>{editing?"编辑任务":"新增任务"}</h2><p>任务绑定项目服务，可关联内部填写或外部提交的一条或多条服务记录。</p></div>
@@ -730,15 +750,15 @@ function TaskForm({editing,projects,records,managers,currentUser,onSave,close}:{
       <label>计划日期<input name="plannedDate" type="date" defaultValue={editing?.plannedDate??""}/></label>
       <label>计划数量<input name="plannedQuantity" type="number" min="1" defaultValue={editing?.plannedQuantity??1} required/></label>
       <label>负责人<select name="owner" defaultValue={editing?.owner??currentUser.name}>{managers.map(manager=><option value={manager.name} key={manager.id}>{manager.name}</option>)}</select></label>
-      <label>完成状态<select name="status" defaultValue={editing?.status==="已完成"?"已完成":"未完成"}><option>未完成</option><option>已完成</option></select></label>
+      <label>完成状态<input disabled value="由已验收数量自动计算"/></label>
       <label className="full">任务说明<textarea name="description" maxLength={1000} defaultValue={editing?.description} placeholder="填写执行要求、时间安排、交付标准等"/></label>
-      <div className="full task-record-picker"><span>关联服务记录</span><small>未完成任务可暂不关联；标记已完成时至少选择一条记录</small>{matchingRecords.length?<div>{matchingRecords.map(record=><label key={record.id}><input type="checkbox" checked={recordIds.includes(record.id)} onChange={event=>setRecordIds(ids=>event.target.checked?[...ids,record.id]:ids.filter(id=>id!==record.id))}/><span><strong>{record.recordType}</strong><small>{String(record.payload.data?.date??record.createdAt.slice(0,10))} · {String(record.payload.data?.provider??"未填写")} · {record.status}</small></span></label>)}</div>:<em>该项目服务下暂无记录，可先创建任务，之后从任务行直接新增服务记录。</em>}</div>
+      <div className="full task-record-picker"><span>关联服务记录</span><small>可关联多条记录；已验收数量达到计划数量后自动完成</small>{matchingRecords.length?<div>{matchingRecords.map(record=><label key={record.id}><input type="checkbox" checked={recordIds.includes(record.id)} onChange={event=>setRecordIds(ids=>event.target.checked?[...ids,record.id]:ids.filter(id=>id!==record.id))}/><span><strong>{record.recordType}</strong><small>{String(record.payload.data?.date??record.createdAt.slice(0,10))} · {String(record.payload.data?.provider??"未填写")} · {record.status}</small></span></label>)}</div>:<em>该项目服务下暂无记录，可先创建任务，之后从任务行直接新增服务记录。</em>}</div>
     </div>
     <div className="modal-actions"><button type="button" onClick={close}>取消</button><button className="primary">{editing?"保存修改":"创建任务"}</button></div>
   </form>;
 }
 
-function Records({records,projects,managerFilter,onManagerFilterChange,refresh,notify,onManagerRecord,onLink,onView,onReview,onEdit}:{records:ServiceRecord[];projects:Project[];managerFilter:string;onManagerFilterChange:(manager:string)=>void;refresh:()=>Promise<void>;notify:(s:string)=>void;onManagerRecord:()=>void;onLink:()=>void;onView:(record:ServiceRecord)=>void;onReview:(record:ServiceRecord)=>void;onEdit:(record:ServiceRecord)=>void}) {
+function Records({records,projects,managerFilter,onManagerFilterChange,refresh,notify,onManagerRecord,onLink,onView,onReview,onAccept,onPayment,onEdit}:{records:ServiceRecord[];projects:Project[];managerFilter:string;onManagerFilterChange:(manager:string)=>void;refresh:()=>Promise<void>;notify:(s:string)=>void;onManagerRecord:()=>void;onLink:()=>void;onView:(record:ServiceRecord)=>void;onReview:(record:ServiceRecord)=>void;onAccept:(record:ServiceRecord)=>void;onPayment:(record:ServiceRecord)=>void;onEdit:(record:ServiceRecord)=>void}) {
   const [period,setPeriod]=useState<"week"|"month"|"all"|"custom">("month");
   const [recordStatus,setRecordStatus]=useState<"all"|"delivered"|"pending">("all");
   const [projectId,setProjectId]=useState<"all"|number>("all");
@@ -761,16 +781,16 @@ function Records({records,projects,managerFilter,onManagerFilterChange,refresh,n
   };
   const projectFiltered=records.filter(record=>managerProjectIds.has(record.projectId)&&(projectId==="all"||record.projectId===projectId));
   const timeFiltered=projectFiltered.filter(inRange);
-  const filtered=timeFiltered.filter(record=>recordStatus==="all"||(recordStatus==="delivered"&&record.status==="已完成")||(recordStatus==="pending"&&record.status==="待审核")).sort((a,b)=>recordDate(b).getTime()-recordDate(a).getTime()||(b.id-a.id));
+  const filtered=timeFiltered.filter(record=>recordStatus==="all"||(recordStatus==="delivered"&&isAcceptedRecord(record))||(recordStatus==="pending"&&!isAcceptedRecord(record))).sort((a,b)=>recordDate(b).getTime()-recordDate(a).getTime()||(b.id-a.id));
   const recordTimestamp=(record:ServiceRecord)=>{
-    const value=record.status==="已完成"&&record.approvedAt?record.approvedAt:record.updatedAt||record.createdAt;
+    const value=isAcceptedRecord(record)&&record.approvedAt?record.approvedAt:record.updatedAt||record.createdAt;
     return new Date(value).toLocaleString("zh-CN",{month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit"});
   };
   function serviceFor(record:ServiceRecord){return projects.find(item=>item.id===record.projectId)?.services.find(item=>item.id===record.serviceId)}
   function isDemoRecord(record:ServiceRecord){return Boolean(projects.find(item=>item.id===record.projectId)?._isDemo)}
   function recordAmount(record:ServiceRecord){return record.amountSnapshot??null}
   const deliveryFinance=(items:ServiceRecord[])=>{
-    const approved=items.filter(record=>record.status==="已完成"&&!isDemoRecord(record));
+    const approved=items.filter(record=>isAcceptedRecord(record)&&!isDemoRecord(record));
     const amount=approved.reduce((sum,record)=>sum+(recordAmount(record)??0),0);
     const cost=approved.reduce((sum,record)=>sum+(record.costAmountSnapshot??0),0);
     return {amount,cost,profitRate:amount>0?(amount-cost)/amount*100:null};
@@ -790,29 +810,29 @@ function Records({records,projects,managerFilter,onManagerFilterChange,refresh,n
     if(!response.ok){setDeletingId(null);notify("删除失败，请重试");return}
     await refresh();setDeletingId(null);notify("服务记录已作废，全部统计数据已实时更新");
   }
-  return <section className="content-card"><div className="section-title"><div><h2>服务记录</h2><p>金额仅后台可见；仅“已完成”记录计入交付金额</p></div><div className="record-actions"><button className="primary" onClick={onManagerRecord}>＋ 项目经理填写</button><button onClick={onLink}>↗ 生成外部填写链接</button></div></div>
-    <div className="entry-guide"><div><span>内部填写</span><strong>项目经理登录后台填写</strong><small>保存后直接更新项目执行进度</small></div><div><span>外部填写</span><strong>咨询师／讲师通过链接填写</strong><small>外部页面不显示金额，提交后进入待审核</small></div></div>
+  return <section className="content-card"><div className="section-title"><div><h2>服务记录</h2><p>只有已验收记录计入交付金额；成本支付状态独立管理</p></div><div className="record-actions"><button className="primary" onClick={onManagerRecord}>＋ 项目经理填写</button><button onClick={onLink}>↗ 生成外部填写链接</button></div></div>
+    <div className="entry-guide"><div><span>内部填写</span><strong>项目经理登录后台填写</strong><small>保存后进入待验收，验收后更新项目进度</small></div><div><span>外部填写</span><strong>咨询师／讲师通过链接填写</strong><small>提交后先审核成本，再进入待验收</small></div></div>
     <div className="live-status"><i/> 数据自动刷新 · 最近同步 {new Date().toLocaleTimeString("zh-CN",{hour:"2-digit",minute:"2-digit",second:"2-digit"})}</div>
     <div className="delivery-summary">
       <div><small>本周正式交付金额</small><span className="delivery-metric"><strong>{money(weekFinance.amount)}</strong><em className={weekFinance.profitRate!==null&&weekFinance.profitRate<0?"negative-profit":""}>利润率 {profitRateLabel(weekFinance.profitRate)}</em></span></div>
       <div><small>本月正式交付金额</small><span className="delivery-metric"><strong>{money(monthFinance.amount)}</strong><em className={monthFinance.profitRate!==null&&monthFinance.profitRate<0?"negative-profit":""}>利润率 {profitRateLabel(monthFinance.profitRate)}</em></span></div>
       <div><small>当前正式筛选金额</small><span className="delivery-metric"><strong>{money(filteredFinance.amount)}</strong><em className={filteredFinance.profitRate!==null&&filteredFinance.profitRate<0?"negative-profit":""}>利润率 {profitRateLabel(filteredFinance.profitRate)}</em></span></div>
-      <div><small>当前已完成记录</small><strong>{filtered.filter(record=>record.status==="已完成").length} 条</strong></div>
+      <div><small>当前已验收记录</small><strong>{filtered.filter(isAcceptedRecord).length} 条</strong></div>
     </div>
     <div className="records-filter record-project-filters"><label><span>项目经理</span><select value={managerFilter} onChange={event=>{onManagerFilterChange(event.target.value);setProjectId("all")}}><option value="all">全部项目经理</option>{managers.map(manager=><option value={manager} key={manager}>{manager}</option>)}</select></label><label className="project-search-filter"><span>所属项目</span><ProjectSearchSelect allowAll projects={managerProjects} value={projectId} onChange={setProjectId}/></label></div>
     <div className="records-filter"><span>服务日期</span>{([["week","本周"],["month","本月"],["all","全部"],["custom","自定义"]] as const).map(([value,label])=><button type="button" key={value} className={period===value?"active":""} onClick={()=>setPeriod(value)}>{label}</button>)}{period==="custom"&&<><input type="date" value={start} onChange={e=>setStart(e.target.value)}/><em>至</em><input type="date" value={end} onChange={e=>setEnd(e.target.value)}/></>}</div>
-    <div className="tabs record-status-tabs"><button className={recordStatus==="all"?"active":""} onClick={()=>setRecordStatus("all")}>全部 {timeFiltered.length}</button><button className={recordStatus==="delivered"?"active":""} onClick={()=>setRecordStatus("delivered")}>已交付 {timeFiltered.filter(record=>record.status==="已完成").length}</button><button className={recordStatus==="pending"?"active":""} onClick={()=>setRecordStatus("pending")}>待审核 {timeFiltered.filter(record=>record.status==="待审核").length}</button></div>
+    <div className="tabs record-status-tabs"><button className={recordStatus==="all"?"active":""} onClick={()=>setRecordStatus("all")}>全部 {timeFiltered.length}</button><button className={recordStatus==="delivered"?"active":""} onClick={()=>setRecordStatus("delivered")}>已验收 {timeFiltered.filter(isAcceptedRecord).length}</button><button className={recordStatus==="pending"?"active":""} onClick={()=>setRecordStatus("pending")}>待处理 {timeFiltered.filter(record=>!isAcceptedRecord(record)).length}</button></div>
     <div className="records-table"><div className="records-row heading"><span>执行时间</span><span>项目／服务</span><span>服务人员</span><span>完成数量</span><span>交付金额</span><span>成本／利润率</span><span>资料</span><span>状态／时间</span><span>操作</span></div>
       {filtered.length===0?<div className="empty-records"><strong>当前时间范围暂无服务记录</strong><span>可切换本周、本月、全部或自定义日期查看</span></div>:filtered.map(record=>{
         const data=record.payload.data??{},amount=recordAmount(record),service=serviceFor(record);
-        return <div className="records-row" key={record.id}><span>{recordDateRange(record)}</span><span>{recordLabel(record)}</span><span>{String(data.provider??"未填写")}</span><span>{Number(data.quantity??1)} {service?.unit??"次"}</span><span className="amount-cell">{amount===null?"审核后冻结":money(amount)}</span><span className="profit-cell">{record.status==="已完成"?(record.costAmountSnapshot===null||record.costAmountSnapshot===undefined?<><strong>待补成本</strong><small>飞书历史数据</small></>:<><strong>{money(record.costAmountSnapshot)}</strong><small className={(record.profitRateBasisPoints??0)<0?"negative-profit":""}>{record.profitRateBasisPoints===null||record.profitRateBasisPoints===undefined?"—":`${(record.profitRateBasisPoints/100).toFixed(1)}%`}</small></>):<small>审核时填写</small>}</span><Attachments recordId={record.id}/><span className="record-time"><Status value={record.status==="已完成"?"已交付":record.status}/><small>{record.status==="已完成"?"审核":"提交/修改"} {recordTimestamp(record)}</small></span><span className="row-actions"><button onClick={()=>onView(record)}>查看</button>{record.status==="待审核"&&<button onClick={()=>onReview(record)}>审核</button>}<button onClick={()=>onEdit(record)}>修改</button><button className="danger-action" disabled={deletingId===record.id} onClick={()=>remove(record)}>{deletingId===record.id?"作废中…":"作废"}</button></span></div>
+        return <div className="records-row" key={record.id}><span>{recordDateRange(record)}</span><span>{recordLabel(record)}</span><span>{String(data.provider??"未填写")}</span><span>{Number(data.quantity??1)} {service?.unit??"次"}</span><span className="amount-cell">{amount===null?"审核后冻结":money(amount)}</span><span className="profit-cell">{record.status!=="待审核"?(record.costAmountSnapshot===null||record.costAmountSnapshot===undefined?<><strong>待补成本</strong><small>历史数据</small></>:<><strong>{money(record.costAmountSnapshot)}</strong><small className={(record.profitRateBasisPoints??0)<0?"negative-profit":""}>{record.profitRateBasisPoints===null||record.profitRateBasisPoints===undefined?"—":`${(record.profitRateBasisPoints/100).toFixed(1)}%`}</small>{isAcceptedRecord(record)&&<Status value={record.paymentStatus??"待支付"}/>}</>):<small>审核时填写</small>}</span><Attachments recordId={record.id}/><span className="record-time"><Status value={isAcceptedRecord(record)?"已验收":record.status}/><small>{isAcceptedRecord(record)?"验收":"提交/修改"} {recordTimestamp(record)}</small></span><span className="row-actions"><button onClick={()=>onView(record)}>查看</button>{record.status==="待审核"&&<button onClick={()=>onReview(record)}>审核</button>}{record.status==="待验收"&&<button onClick={()=>onAccept(record)}>验收</button>}{isAcceptedRecord(record)&&<button onClick={()=>onPayment(record)}>{record.paymentStatus==="已支付"?"撤销支付":"确认支付"}</button>}<button onClick={()=>onEdit(record)}>修改</button><button className="danger-action" disabled={deletingId===record.id} onClick={()=>remove(record)}>{deletingId===record.id?"作废中…":"作废"}</button></span></div>
       })}
     </div>
   </section>;
 }
 
 function Consultants({records,projects,onView}:{records:ServiceRecord[];projects:Project[];onView:(record:ServiceRecord)=>void}){
-  const approved=records.filter(record=>record.status==="已完成"&&String(record.payload.data?.provider??"").trim());
+  const approved=records.filter(record=>isAcceptedRecord(record)&&String(record.payload.data?.provider??"").trim());
   const consultants=Array.from(new Set(approved.map(record=>String(record.payload.data?.provider).trim()))).sort((a,b)=>a.localeCompare(b,"zh-CN"));
   const [consultant,setConsultant]=useState("all");
   const [query,setQuery]=useState("");
@@ -837,7 +857,7 @@ function Consultants({records,projects,onView}:{records:ServiceRecord[];projects
   },new Map<string,{provider:string;serviceName:string;unit:string;consultantPrice:number;materialPrice:number;price:number;quantity:number;count:number;total:number}>()).values())
     .sort((a,b)=>a.provider.localeCompare(b.provider,"zh-CN")||a.serviceName.localeCompare(b.serviceName,"zh-CN")||b.price-a.price);
   return <section className="content-card consultant-page">
-    <div className="section-title"><div><h2>咨询师归集</h2><p>仅统计已审核交付记录；咨询师成本与物料成本分别归集展示</p></div></div>
+    <div className="section-title"><div><h2>咨询师归集</h2><p>仅统计已验收交付记录；咨询师成本与物料成本分别归集展示</p></div></div>
     <div className="consultant-summary">
       <div><small>已归集咨询师</small><strong>{consultant==="all"?consultants.length:filtered.length?1:0} 人</strong></div>
       <div><small>累计服务数量</small><strong>{totalQuantity.toLocaleString("zh-CN")}</strong></div>
@@ -849,15 +869,15 @@ function Consultants({records,projects,onView}:{records:ServiceRecord[];projects
       <label><span>咨询师姓名</span><select value={consultant} onChange={event=>setConsultant(event.target.value)}><option value="all">全部咨询师</option>{visibleConsultants.map(name=><option value={name} key={name}>{name}</option>)}</select></label>
       {consultant!=="all"&&<button type="button" onClick={()=>{setConsultant("all");setQuery("")}}>清除筛选</button>}
     </div>
-    <div className="consultant-section-title"><div><h3>服务价格汇总</h3><p>同一咨询师的不同服务、不同审核价格分别归集</p></div><span>{priceGroups.length} 个价格项</span></div>
+    <div className="consultant-section-title"><div><h3>服务价格汇总</h3><p>同一咨询师的不同服务、不同验收成本分别归集</p></div><span>{priceGroups.length} 个价格项</span></div>
     <div className="consultant-price-table">
       <div className="consultant-price-row heading"><span>咨询师</span><span>服务内容</span><span>咨询师成本</span><span>物料成本</span><span>服务数量</span><span>记录数</span><span>累计总成本</span></div>
       {priceGroups.map(group=><div className="consultant-price-row" key={`${group.provider}-${group.serviceName}-${group.consultantPrice}-${group.materialPrice}`}><strong>{group.provider}</strong><span>{group.serviceName}</span><span className="consultant-price">{money(group.consultantPrice)} / {group.unit}</span><span>{money(group.materialPrice)} / {group.unit}</span><span>{group.quantity} {group.unit}</span><span>{group.count} 条</span><strong>{money(group.total)}</strong></div>)}
-      {!priceGroups.length&&<div className="empty-records"><strong>暂无符合条件的已审核记录</strong><span>审核服务记录并填写成本后，将自动归集到这里</span></div>}
+      {!priceGroups.length&&<div className="empty-records"><strong>暂无符合条件的已验收记录</strong><span>服务记录验收通过后，将自动归集到这里</span></div>}
     </div>
     <div className="consultant-section-title detail-title"><div><h3>服务明细</h3><p>数据与服务记录同步，按执行时间从近到远排列</p></div><span>{filtered.length} 条</span></div>
     <div className="consultant-detail-table">
-      <div className="consultant-detail-row heading"><span>执行时间</span><span>咨询师</span><span>项目／服务</span><span>服务数量</span><span>咨询师成本</span><span>物料成本</span><span>总成本</span><span>审核时间</span><span>操作</span></div>
+      <div className="consultant-detail-row heading"><span>执行时间</span><span>咨询师</span><span>项目／服务</span><span>服务数量</span><span>咨询师成本</span><span>物料成本</span><span>总成本</span><span>验收时间</span><span>操作</span></div>
       {filtered.map(record=>{
         const {project,service}=servicesFor(record),data=record.payload.data??{};
         const quantity=Number(data.quantity??1),start=recordStartDate(data),end=recordEndDate(data);
@@ -880,18 +900,19 @@ function ViewRecordDialog({record,projects,close}:{record:ServiceRecord;projects
   const data=record.payload.data??{};
   const hidden=new Set(["projectId","serviceId","recordType","status","costUnit","consultantCostUnit","materialCostUnit"]);
   const details=Object.entries(data).filter(([key,value])=>!hidden.has(key)&&value!==""&&value!==null&&value!==undefined);
-  const timestamp=record.status==="已完成"&&record.approvedAt?record.approvedAt:record.updatedAt||record.createdAt;
+  const timestamp=isAcceptedRecord(record)&&record.approvedAt?record.approvedAt:record.updatedAt||record.createdAt;
   return <div className="review-dialog view-record-dialog">
     <div className="modal-title"><h2>查看服务记录</h2><p>以下为该条记录当前保存的完整填写内容、状态与附件。</p></div>
-    <div className="review-head"><div><small>所属项目</small><strong>{project?.name??"项目已归档"}</strong></div><div><small>服务内容</small><strong>{service?.name??record.recordType}</strong></div><div><small>记录类型</small><strong>{record.recordType}</strong></div><Status value={record.status==="已完成"?"已交付":record.status}/></div>
+    <div className="review-head"><div><small>所属项目</small><strong>{project?.name??"项目已归档"}</strong></div><div><small>服务内容</small><strong>{service?.name??record.recordType}</strong></div><div><small>记录类型</small><strong>{record.recordType}</strong></div><Status value={isAcceptedRecord(record)?"已验收":record.status}/></div>
     <section className="review-section"><h3>填写内容</h3><div className="review-details">
       {details.length?details.map(([key,value])=><div className={key==="summary"?"wide":""} key={key}><small>{recordFieldLabels[key]??key}</small><strong>{String(value)}</strong></div>):<div className="wide"><small>填写内容</small><strong>暂无其他填写内容</strong></div>}
     </div></section>
     <section className="review-section"><h3>活动资料与附件</h3><Attachments recordId={record.id} previewImages/></section>
     <section className="review-section record-meta"><h3>记录信息</h3><div className="review-details">
       <div><small>提交时间</small><strong>{new Date(record.createdAt).toLocaleString("zh-CN")}</strong></div>
-      <div><small>{record.status==="已完成"?"审核时间":"最近修改时间"}</small><strong>{new Date(timestamp).toLocaleString("zh-CN")}</strong></div>
+      <div><small>{isAcceptedRecord(record)?"验收时间":"最近修改时间"}</small><strong>{new Date(timestamp).toLocaleString("zh-CN")}</strong></div>
       <div><small>完成数量</small><strong>{Number(data.quantity??1)} {service?.unit??"次"}</strong></div>
+      {isAcceptedRecord(record)&&<div><small>成本支付</small><strong>{record.paymentStatus??"待支付"}{record.paidAt?` · ${new Date(record.paidAt).toLocaleDateString("zh-CN")}`:""}</strong></div>}
     </div></section>
     <div className="modal-actions"><button type="button" className="primary" onClick={close}>关闭</button></div>
   </div>;
@@ -910,13 +931,13 @@ function ReviewRecordDialog({record,projects,notify,close,onApproved}:{record:Se
   async function approve(){
     if(consultantCostUnit===""||materialCostUnit==="")return;
     setSubmitting(true);
-    const response=await fetch(appPath("/api/records"),{method:"PATCH",headers:{"content-type":"application/json"},body:JSON.stringify({id:record.id,status:"已完成",data:{consultantCostUnit:Number(consultantCostUnit),materialCostUnit:Number(materialCostUnit)}})});
+    const response=await fetch(appPath("/api/records"),{method:"PATCH",headers:{"content-type":"application/json"},body:JSON.stringify({id:record.id,status:"待验收",data:{consultantCostUnit:Number(consultantCostUnit),materialCostUnit:Number(materialCostUnit)}})});
     const result=await response.json().catch(()=>({})) as {error?:string};
     if(!response.ok){setSubmitting(false);notify(result.error??"审核失败，请重试");return}
-    await onApproved();notify("审核通过，交付金额、成本和利润率已冻结");
+    await onApproved();notify("审核通过，成本已冻结并进入待验收");
   }
   return <div className="review-dialog">
-    <div className="modal-title"><h2>审核服务记录</h2><p>请先核对外部人员提交的完整内容和附件，再填写本次成本并审核通过。</p></div>
+    <div className="modal-title"><h2>审核服务记录</h2><p>核对外部提交内容并补齐成本；审核通过后进入待验收。</p></div>
     <div className="review-head"><div><small>所属项目</small><strong>{project?.name??"项目已归档"}</strong></div><div><small>服务内容</small><strong>{service?.name??record.recordType}</strong></div><div><small>记录类型</small><strong>{record.recordType}</strong></div><Status value="待审核"/></div>
     <section className="review-section"><h3>提交内容</h3><div className="review-details">
       {details.map(([key,value])=><div className={key==="summary"?"wide":""} key={key}><small>{recordFieldLabels[key]??key}</small><strong>{String(value)}</strong></div>)}
@@ -930,7 +951,7 @@ function ReviewRecordDialog({record,projects,notify,close,onApproved}:{record:Se
       <div><small>本次交付金额</small><strong>{money((service?.unitPrice??0)*Number(data.quantity??1))}</strong></div>
       <div><small>单条利润率</small><strong className={profitRate!==null&&profitRate<0?"negative-profit":""}>{profitRate===null?"填写成本后计算":`${profitRate.toFixed(1)}%`}</strong></div>
     </div></section>
-    <div className="modal-actions"><button type="button" onClick={close}>取消</button><button type="button" className="primary" disabled={consultantCostUnit===""||materialCostUnit===""||submitting} onClick={approve}>{submitting?"审核处理中…":"审核通过"}</button></div>
+    <div className="modal-actions"><button type="button" onClick={close}>取消</button><button type="button" className="primary" disabled={consultantCostUnit===""||materialCostUnit===""||submitting} onClick={approve}>{submitting?"审核处理中…":"审核并送验收"}</button></div>
   </div>;
 }
 
@@ -950,6 +971,49 @@ function Attachments({recordId,previewImages=false}:{recordId:number;previewImag
     </a>;
   })}</div>;
   return <span className="attachment-links">{files.map(file=><a key={file.id} href={appPath(`/api/files?id=${file.id}`)} target="_blank" rel="noreferrer">{file.name}</a>)}</span>;
+}
+
+function ProjectAttachments({projectId}:{projectId:number}){
+  const [files,setFiles]=useState<Array<{id:number;name:string;category?:string|null;size?:number}>>([]);
+  useEffect(()=>{fetch(appPath(`/api/files?projectId=${projectId}`)).then(response=>response.ok?response.json():{files:[]}).then(data=>setFiles(data.files??[])).catch(()=>undefined)},[projectId]);
+  if(!files.length)return <div className="empty-records compact"><span>尚未上传结项资料</span></div>;
+  return <div className="project-file-list">{files.map(file=><a key={file.id} href={appPath(`/api/files?id=${file.id}`)} target="_blank" rel="noreferrer"><Status value={file.category??"其他资料"}/><span><strong>{file.name}</strong><small>{file.size?`${(file.size/1024/1024).toFixed(1)} MB`:"项目资料"}</small></span></a>)}</div>;
+}
+
+function ProjectClosureDialog({project,records,notify,close,onClosed}:{project:Project;records:ServiceRecord[];notify:(message:string)=>void;close:()=>void;onClosed:()=>Promise<void>}){
+  const [submitting,setSubmitting]=useState(false);
+  const [serverBlockers,setServerBlockers]=useState<string[]>([]);
+  const accepted=records.filter(isAcceptedRecord),pending=records.filter(record=>["待审核","待验收"].includes(record.status));
+  const unpaid=accepted.filter(record=>record.paymentStatus!=="已支付"),missingCost=accepted.filter(record=>record.costAmountSnapshot===null||record.costAmountSnapshot===undefined);
+  const revenue=project.services.reduce((sum,service)=>sum+service.quantity*service.unitPrice,0);
+  const cost=accepted.reduce((sum,record)=>sum+Number(record.costAmountSnapshot??0),0),tax=Math.round(revenue*0.06),profit=revenue-cost-tax;
+  async function uploadCategory(files:FormDataEntryValue[],category:string){
+    for(const file of files){
+      if(!(file instanceof File)||file.size===0)continue;
+      const upload=new FormData();upload.append("file",file);upload.append("projectId",String(project.id));upload.append("category",category);
+      const response=await fetch(appPath("/api/upload"),{method:"POST",body:upload});
+      if(!response.ok){const data=await response.json().catch(()=>({})) as {error?:string};throw new Error(data.error??`${category}上传失败`)}
+    }
+  }
+  async function submit(form:FormData){
+    setSubmitting(true);setServerBlockers([]);
+    try{
+      await uploadCategory(form.getAll("resultFiles"),"成果报告");
+      await uploadCategory(form.getAll("invoiceFiles"),"发票");
+      await uploadCategory(form.getAll("evaluationFiles"),"客户评价");
+      const response=await fetch(appPath("/api/projects"),{method:"PATCH",headers:{"content-type":"application/json"},body:JSON.stringify({action:"close",id:project.id})});
+      const data=await response.json().catch(()=>({})) as {error?:string;blockers?:string[]};
+      if(!response.ok){setServerBlockers(data.blockers??[data.error??"项目暂不能结项"]);setSubmitting(false);return}
+      await onClosed();notify("项目已结项归档，税费和最终利润已冻结");
+    }catch(error){notify(error instanceof Error?error.message:"结项失败，请重试");setSubmitting(false)}
+  }
+  return <form action={submit} className="closure-dialog"><div className="modal-title"><h2>项目结项</h2><p>系统将校验交付、验收、任务和成本支付状态，并按项目总价自动核算6%税费。</p></div>
+    <div className="closure-checks"><div><small>服务进度</small><strong>{projectProgress(project)}%</strong><Status value={isProjectFinished(project)?"已完成":"未完成"}/></div><div><small>待处理记录</small><strong>{pending.length} 条</strong><Status value={pending.length?"待处理":"正常"}/></div><div><small>未支付成本</small><strong>{unpaid.length} 条</strong><Status value={unpaid.length?"待支付":"已支付"}/></div><div><small>缺少成本</small><strong>{missingCost.length} 条</strong><Status value={missingCost.length?"待补充":"正常"}/></div></div>
+    <section className="closure-finance"><h3>结项财务预览</h3><div><span>项目收入<strong>{money(revenue)}</strong></span><span>服务成本<strong>{money(cost)}</strong></span><span>税费（6%）<strong>{money(tax)}</strong></span><span>预计利润<strong>{money(profit)}</strong></span></div></section>
+    <section className="closure-files"><h3>结项资料</h3><div className="form-grid"><label>成果报告<input name="resultFiles" type="file" multiple accept=".pdf,.ppt,.pptx,.doc,.docx,.xls,.xlsx,.jpg,.jpeg,.png"/></label><label>发票<input name="invoiceFiles" type="file" multiple accept=".pdf,.jpg,.jpeg,.png"/></label><label className="full">客户评价<input name="evaluationFiles" type="file" multiple accept=".pdf,.doc,.docx,.jpg,.jpeg,.png"/></label></div><ProjectAttachments projectId={project.id}/></section>
+    {serverBlockers.length>0&&<div className="closure-blockers"><strong>暂不能结项，请先处理：</strong><ul>{serverBlockers.map(blocker=><li key={blocker}>{blocker}</li>)}</ul></div>}
+    <div className="modal-actions"><button type="button" onClick={close}>取消</button><button className="primary" disabled={submitting}>{submitting?"正在校验并结项…":"确认结项并归档"}</button></div>
+  </form>;
 }
 
 type ExternalLink={id:number;token:string;projectId:number;serviceId:number;formType:string;expiresAt?:string|null;maxSubmissions:number;submissionCount:number;status:string;createdAt:string;lastUsedAt?:string|null};
@@ -986,8 +1050,8 @@ function EditRecordForm({record,projects,onSave,close}:{record:ServiceRecord;pro
       <label>记录类型<select name="recordType" defaultValue={record.recordType}><option>讲座／团辅活动记录</option><option>心理咨询台账</option><option>培训活动记录</option><option>驻场服务记录</option><option>EAP宣传记录</option><option>心理测评记录</option></select></label>
       <label>服务人员<input name="provider" required defaultValue={String(data.provider??"")}/></label>
       <label>服务开始日期<input name="startDate" type="date" required defaultValue={recordStartDate(data)}/></label><label>服务结束日期<input name="endDate" type="date" required defaultValue={recordEndDate(data)}/></label><label>本次完成数量<input name="quantity" type="number" min="1" required defaultValue={Number(data.quantity??1)}/></label>
-      <label>咨询师成本单价（元）<input name="consultantCostUnit" type="number" min="0" step="0.01" value={consultantCostUnit} onChange={e=>setConsultantCostUnit(e.target.value)} required={record.status==="已完成"} placeholder={record.status==="待审核"?"可在审核时填写":"必填"}/></label>
-      <label>物料成本单价（元）<input name="materialCostUnit" type="number" min="0" step="0.01" value={materialCostUnit} onChange={e=>setMaterialCostUnit(e.target.value)} required={record.status==="已完成"} placeholder="无物料成本请填0"/></label>
+      <label>咨询师成本单价（元）<input name="consultantCostUnit" type="number" min="0" step="0.01" value={consultantCostUnit} onChange={e=>setConsultantCostUnit(e.target.value)} required={record.status!=="待审核"} placeholder={record.status==="待审核"?"可在审核时填写":"必填"}/></label>
+      <label>物料成本单价（元）<input name="materialCostUnit" type="number" min="0" step="0.01" value={materialCostUnit} onChange={e=>setMaterialCostUnit(e.target.value)} required={record.status!=="待审核"} placeholder="无物料成本请填0"/></label>
       <div className="profit-preview"><small>单条利润率</small><strong className={profitRate!==null&&profitRate<0?"negative-profit":""}>{profitRate===null?"填写成本后计算":`${profitRate.toFixed(1)}%`}</strong></div>
       <label className="full">服务执行情况<textarea name="summary" required defaultValue={String(data.summary??"")}/></label></div>
     <div className="modal-actions"><button type="button" onClick={close}>取消</button><button className="primary">保存修改</button></div></form>;

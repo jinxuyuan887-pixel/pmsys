@@ -1,6 +1,6 @@
-import { and, desc, eq, gte, isNull, lte, sql } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, isNull, lte, sql } from "drizzle-orm";
 import { getDb } from "../../../db";
-import { auditLogs, fileAttachments, formLinks, projects, serviceRecords } from "../../../db/schema";
+import { auditLogs, deliveryTaskRecords, deliveryTasks, fileAttachments, formLinks, projects, serviceRecords } from "../../../db/schema";
 import { requireApiUser } from "../../auth";
 
 const allowedTypes=["讲座／团辅活动记录","心理咨询台账","培训活动记录","驻场服务记录","EAP宣传记录","心理测评记录"];
@@ -21,6 +21,7 @@ const materialCostOf=(data?:Record<string,unknown>)=>Number(data?.materialCostUn
 const costOf=(data?:Record<string,unknown>)=>consultantCostOf(data)+materialCostOf(data);
 const dateOf=(data?:Record<string,unknown>)=>String(data?.startDate??data?.date??"");
 const endDateOf=(data?:Record<string,unknown>)=>String(data?.endDate??data?.startDate??data?.date??"");
+const isAccepted=(status:string)=>["已验收","已完成"].includes(status);
 const validDate=(value:string)=>/^\d{4}-\d{2}-\d{2}$/.test(value)&&!Number.isNaN(new Date(`${value}T00:00:00`).getTime());
 function validate(type:string,data?:Record<string,unknown>){
   const quantity=quantityOf(data);
@@ -57,6 +58,25 @@ async function linkFiles(keys:string[],recordId:number,token?:string){
   }
 }
 
+async function refreshLinkedTasks(db:Awaited<ReturnType<typeof getDb>>,recordId:number){
+  const links=await db.select().from(deliveryTaskRecords).where(eq(deliveryTaskRecords.recordId,recordId));
+  const taskIds=Array.from(new Set(links.map(link=>link.taskId)));
+  if(!taskIds.length)return;
+  const tasks=await db.select().from(deliveryTasks).where(inArray(deliveryTasks.id,taskIds));
+  const allLinks=await db.select().from(deliveryTaskRecords).where(inArray(deliveryTaskRecords.taskId,taskIds));
+  const recordIds=Array.from(new Set(allLinks.map(link=>link.recordId)));
+  const records=recordIds.length?await db.select().from(serviceRecords).where(and(inArray(serviceRecords.id,recordIds),isNull(serviceRecords.deletedAt))):[];
+  const byId=new Map(records.map(record=>[record.id,record]));
+  for(const task of tasks){
+    const acceptedQuantity=allLinks.filter(link=>link.taskId===task.id).reduce((sum,link)=>{
+      const record=byId.get(link.recordId);if(!record||!isAccepted(record.status))return sum;
+      const payload=JSON.parse(record.payload) as {data?:Record<string,unknown>};
+      return sum+quantityOf(payload.data);
+    },0);
+    await db.update(deliveryTasks).set({status:acceptedQuantity>=task.plannedQuantity?"已完成":"未完成",updatedAt:sql`CURRENT_TIMESTAMP`}).where(eq(deliveryTasks.id,task.id));
+  }
+}
+
 export async function GET(request:Request){
   const auth=await requireApiUser(request);if(auth.response)return auth.response;
   try{
@@ -65,7 +85,7 @@ export async function GET(request:Request){
     const start=url.searchParams.get("start"),end=url.searchParams.get("end"),status=url.searchParams.get("status");
     if(start)conditions.push(gte(serviceRecords.serviceDate,start));
     if(end)conditions.push(lte(serviceRecords.serviceDate,end));
-    if(status&&["已完成","待审核"].includes(status))conditions.push(eq(serviceRecords.status,status));
+    if(status&&["已验收","已完成","待验收","待审核"].includes(status))conditions.push(eq(serviceRecords.status,status));
     const db=await getDb();
     const [rows,totalRows]=await Promise.all([
       db.select().from(serviceRecords).where(and(...conditions)).orderBy(desc(serviceRecords.serviceDate),desc(serviceRecords.updatedAt),desc(serviceRecords.id)).limit(pageSize).offset((page-1)*pageSize),
@@ -96,14 +116,15 @@ export async function POST(request:Request){
     if(body.token)type=recordTypeForService(target.service.name,type);
     const validation=validate(type,body.data);if(validation)throw new Error(validation);
     if(body.token){const externalValidation=validateExternalService(target.service.name,body.data);if(externalValidation)throw new Error(externalValidation)}
-    const status=body.token?"待审核":"已完成";
+    const status=body.token?"待审核":"待验收";
     const quantity=quantityOf(body.data);
-    const unitPrice=status==="已完成"?Number(target.service.unitPrice)||0:null;
-    if(status==="已完成"&&!hasCost(body.data))throw new Error("请填写咨询师成本和物料成本后再保存");
-    if(status==="已完成"&&Number(unitPrice)<=0)throw new Error("当前服务单价为0，无法计算利润率，请先修改项目服务单价");
-    const consultantCostUnit=status==="已完成"?consultantCostOf(body.data):null;
-    const materialCostUnit=status==="已完成"?materialCostOf(body.data):null;
-    const costUnit=status==="已完成"?costOf(body.data):null;
+    const hasFrozenFinance=status!=="待审核";
+    const unitPrice=hasFrozenFinance?Number(target.service.unitPrice)||0:null;
+    if(hasFrozenFinance&&!hasCost(body.data))throw new Error("请填写咨询师成本和物料成本后再保存");
+    if(hasFrozenFinance&&Number(unitPrice)<=0)throw new Error("当前服务单价为0，无法计算利润率，请先修改项目服务单价");
+    const consultantCostUnit=hasFrozenFinance?consultantCostOf(body.data):null;
+    const materialCostUnit=hasFrozenFinance?materialCostOf(body.data):null;
+    const costUnit=hasFrozenFinance?costOf(body.data):null;
     if([consultantCostUnit,materialCostUnit,costUnit].some(value=>value!==null&&(!Number.isFinite(value)||value<0||value>100000000)))throw new Error("咨询师成本和物料成本必须为0或正数");
     const profitRate=unitPrice&&costUnit!==null?Math.round((unitPrice-costUnit)/unitPrice*10000):null;
     const [record]=await db.insert(serviceRecords).values({
@@ -111,7 +132,7 @@ export async function POST(request:Request){
       payload:JSON.stringify({...body,data:{...body.data,consultantCostUnit,materialCostUnit,costUnit,status}}),status,
       unitPriceSnapshot:unitPrice,amountSnapshot:unitPrice===null?null:Math.round(unitPrice*quantity),
       costUnitSnapshot:costUnit,costAmountSnapshot:costUnit===null?null:Math.round(costUnit*quantity),profitRateBasisPoints:profitRate,
-      updatedAt:new Date().toISOString(),approvedAt:status==="已完成"?new Date().toISOString():null
+      updatedAt:new Date().toISOString(),approvedAt:null
     }).returning();
     await linkFiles(body.uploaded??[],record.id,body.token);
     await db.insert(auditLogs).values({userId:auth?.user?.id,username:auth?.user?.username??"外部填写人",action:"提交",entityType:"服务记录",entityId:String(record.id),summary:`提交${type}`,afterPayload:JSON.stringify(body)});
@@ -126,23 +147,34 @@ export async function POST(request:Request){
 export async function PATCH(request:Request){
   const auth=await requireApiUser(request);if(auth.response||!auth.user)return auth.response;
   try{
-    const body=await request.json() as {id?:number;status?:string;data?:Record<string,unknown>;type?:string;uploaded?:string[]};
+    const body=await request.json() as {id?:number;status?:string;data?:Record<string,unknown>;type?:string;uploaded?:string[];action?:string;paymentStatus?:string};
     if(!body.id)return Response.json({error:"id is required"},{status:400});
-    if(body.status&&!["待审核","已完成"].includes(body.status))return Response.json({error:"状态不正确"},{status:400});
+    if(body.status&&!["待审核","待验收","已验收"].includes(body.status))return Response.json({error:"状态不正确"},{status:400});
     const db=await getDb(),[current]=await db.select().from(serviceRecords).where(and(eq(serviceRecords.id,body.id),isNull(serviceRecords.deletedAt))).limit(1);
     if(!current)return Response.json({error:"记录不存在"},{status:404});
+    if(body.action==="payment"){
+      if(!isAccepted(current.status))return Response.json({error:"服务记录验收完成后才能确认支付"},{status:400});
+      if(!["待支付","已支付"].includes(String(body.paymentStatus)))return Response.json({error:"支付状态不正确"},{status:400});
+      if(current.costAmountSnapshot===null||current.costAmountSnapshot===undefined)return Response.json({error:"记录缺少成本，不能确认支付"},{status:400});
+      const paymentStatus=String(body.paymentStatus),now=new Date().toISOString();
+      const [record]=await db.update(serviceRecords).set({paymentStatus,paidAt:paymentStatus==="已支付"?now:null,paidBy:paymentStatus==="已支付"?auth.user.username:null,updatedAt:now}).where(eq(serviceRecords.id,body.id)).returning();
+      await db.insert(auditLogs).values({userId:auth.user.id,username:auth.user.username,action:paymentStatus==="已支付"?"确认支付":"撤销支付",entityType:"服务记录",entityId:String(body.id),summary:`${paymentStatus==="已支付"?"确认":"撤销"}${current.recordType}成本支付`,beforePayload:JSON.stringify(current),afterPayload:JSON.stringify(record)});
+      return Response.json({record});
+    }
     const currentPayload=JSON.parse(current.payload) as {data?:Record<string,unknown>;type?:string;uploaded?:string[]};
     const nextPayload=body.data?{...currentPayload,data:{...currentPayload.data,...body.data},type:body.type??currentPayload.type,uploaded:body.uploaded??currentPayload.uploaded}:currentPayload;
     const type=String(body.type??current.recordType),nextStatus=body.status??current.status;
     const validation=validate(type,nextPayload.data);if(validation)return Response.json({error:validation},{status:400});
     const projectId=Number(nextPayload.data?.projectId)||current.projectId,serviceId=Number(nextPayload.data?.serviceId)||current.serviceId;
     const target=await projectService(projectId,serviceId);if(!target)return Response.json({error:"项目或服务内容不存在，可能已归档"},{status:400});
-    const unitPrice=nextStatus==="已完成"?Number(target.service.unitPrice)||0:null,now=new Date().toISOString();
-    if(nextStatus==="已完成"&&!hasCost(nextPayload.data))return Response.json({error:"请填写咨询师成本和物料成本后再审核通过"},{status:400});
-    if(nextStatus==="已完成"&&Number(unitPrice)<=0)return Response.json({error:"当前服务单价为0，无法计算利润率，请先修改项目服务单价"},{status:400});
-    const consultantCostUnit=nextStatus==="已完成"?consultantCostOf(nextPayload.data):null;
-    const materialCostUnit=nextStatus==="已完成"?materialCostOf(nextPayload.data):null;
-    const costUnit=nextStatus==="已完成"?costOf(nextPayload.data):null;
+    if(body.status==="已验收"&&current.status!=="待验收")return Response.json({error:"只有待验收记录可以执行验收"},{status:400});
+    const hasFrozenFinance=nextStatus!=="待审核";
+    const unitPrice=hasFrozenFinance?Number(target.service.unitPrice)||0:null,now=new Date().toISOString();
+    if(hasFrozenFinance&&!hasCost(nextPayload.data))return Response.json({error:"请填写咨询师成本和物料成本后再提交验收"},{status:400});
+    if(hasFrozenFinance&&Number(unitPrice)<=0)return Response.json({error:"当前服务单价为0，无法计算利润率，请先修改项目服务单价"},{status:400});
+    const consultantCostUnit=hasFrozenFinance?consultantCostOf(nextPayload.data):null;
+    const materialCostUnit=hasFrozenFinance?materialCostOf(nextPayload.data):null;
+    const costUnit=hasFrozenFinance?costOf(nextPayload.data):null;
     if([consultantCostUnit,materialCostUnit,costUnit].some(value=>value!==null&&(!Number.isFinite(value)||value<0||value>100000000)))return Response.json({error:"咨询师成本和物料成本必须为0或正数"},{status:400});
     nextPayload.data={...nextPayload.data,consultantCostUnit,materialCostUnit,costUnit};
     const profitRate=unitPrice&&costUnit!==null?Math.round((unitPrice-costUnit)/unitPrice*10000):null;
@@ -150,9 +182,10 @@ export async function PATCH(request:Request){
       status:nextStatus,projectId,serviceId,recordType:type,serviceDate:dateOf(nextPayload.data),payload:JSON.stringify(nextPayload),
       unitPriceSnapshot:unitPrice,amountSnapshot:unitPrice===null?null:Math.round(unitPrice*quantityOf(nextPayload.data)),
       costUnitSnapshot:costUnit,costAmountSnapshot:costUnit===null?null:Math.round(costUnit*quantityOf(nextPayload.data)),profitRateBasisPoints:profitRate,
-      updatedAt:now,approvedAt:nextStatus==="已完成"?(current.status==="已完成"?current.approvedAt??now:now):null
+      updatedAt:now,approvedAt:isAccepted(nextStatus)?(isAccepted(current.status)?current.approvedAt??now:now):null
     }).where(eq(serviceRecords.id,body.id)).returning();
-    await db.insert(auditLogs).values({userId:auth.user.id,username:auth.user.username,action:body.status==="已完成"?"审核通过":"修改",entityType:"服务记录",entityId:String(body.id),summary:body.status==="已完成"?`审核通过${record.recordType}`:`修改${record.recordType}`,beforePayload:current.payload,afterPayload:record.payload});
+    await db.insert(auditLogs).values({userId:auth.user.id,username:auth.user.username,action:body.status==="已验收"?"验收通过":body.status==="待验收"?"审核通过":"修改",entityType:"服务记录",entityId:String(body.id),summary:body.status?`${body.status}：${record.recordType}`:`修改${record.recordType}`,beforePayload:current.payload,afterPayload:record.payload});
+    await refreshLinkedTasks(db,record.id);
     return Response.json({record});
   }catch(error){return Response.json({error:error instanceof Error?error.message:"更新失败"},{status:500})}
 }
@@ -168,6 +201,7 @@ export async function DELETE(request:Request){
       db.update(serviceRecords).set({deletedAt,deletedBy:auth.user.username,updatedAt:deletedAt}).where(eq(serviceRecords.id,id)),
       db.insert(auditLogs).values({userId:auth.user.id,username:auth.user.username,action:"作废",entityType:"服务记录",entityId:String(id),summary:`作废${current.recordType}`,beforePayload:current.payload})
     ]);
+    await refreshLinkedTasks(db,id);
     return Response.json({deleted:true,id});
   }catch(error){return Response.json({error:error instanceof Error?error.message:"删除失败"},{status:500})}
 }

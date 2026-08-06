@@ -1,16 +1,17 @@
 import { and, asc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { getDb } from "../../../db";
-import { auditLogs, projects, projectVersions, serviceRecords, users } from "../../../db/schema";
+import { auditLogs, deliveryTaskRecords, deliveryTasks, projects, projectVersions, serviceRecords, users } from "../../../db/schema";
 import { requireApiUser } from "../../auth";
 
 type ProjectInput = { id: number; name?: string; manager?:string; managerIds?:number[]; _version?: number; [key: string]: unknown };
 const clean = (project: ProjectInput) => {
-  const payload = { ...project };
+  const services=Array.isArray(project.services)?project.services as ServiceInput[]:[];
+  const payload = { ...project, total:services.reduce((sum,service)=>sum+Number(service.quantity)*Number(service.unitPrice),0) };
   delete payload._version;
   return payload;
 };
 
-type ServiceInput={id:number;name:string;contractDetail?:string;unit:string;quantity:number;unitPrice:number;costPrice?:number;completed?:number};
+type ServiceInput={id:number;name:string;contractDetail?:string;unit?:string;quantity:number;unitPrice:number;costPrice?:number;completed?:number};
 function validateProject(project:ProjectInput){
   if(!String(project.name??"").trim())return "请填写项目名称";
   const services=Array.isArray(project.services)?project.services as ServiceInput[]:[];
@@ -62,11 +63,11 @@ export async function GET(request: Request) {
       projectId:serviceRecords.projectId,
       serviceId:serviceRecords.serviceId,
       quantity:sql<number>`sum(CAST(COALESCE(json_extract(${serviceRecords.payload}, '$.data.quantity'), 1) AS REAL))`
-    }).from(serviceRecords).where(and(eq(serviceRecords.status,"已完成"),isNull(serviceRecords.deletedAt))).groupBy(serviceRecords.projectId,serviceRecords.serviceId);
+    }).from(serviceRecords).where(and(inArray(serviceRecords.status,["已验收","已完成"]),isNull(serviceRecords.deletedAt))).groupBy(serviceRecords.projectId,serviceRecords.serviceId);
     const totals=new Map(delivered.map(item=>[`${item.projectId}:${item.serviceId}`,Number(item.quantity)||0]));
     return Response.json({ projects: rows.map(row => {
       const project=JSON.parse(row.payload) as {services?:ServiceInput[]};
-      return {...project,services:(project.services??[]).map(service=>({...service,completed:totals.get(`${row.id}:${service.id}`)??0})),_version:row.version,_archivedAt:row.archivedAt,_isDemo:row.isDemo};
+      return {...project,total:(project.services??[]).reduce((sum,service)=>sum+Number(service.quantity)*Number(service.unitPrice),0),services:(project.services??[]).map(service=>({...service,completed:totals.get(`${row.id}:${service.id}`)??0})),_version:row.version,_archivedAt:row.archivedAt,_closedAt:row.closedAt,_closedBy:row.closedBy,_taxRateBasisPoints:row.taxRateBasisPoints,_taxAmount:row.taxAmount,_finalRevenue:row.finalRevenue,_finalCost:row.finalCost,_finalProfit:row.finalProfit,_isDemo:row.isDemo};
     }) });
   } catch (error) {
     return Response.json({ error: error instanceof Error ? error.message : "读取项目失败" }, { status: 500 });
@@ -101,9 +102,57 @@ export async function PATCH(request: Request) {
   const auth = await requireApiUser(request); if (auth.response || !auth.user) return auth.response;
   try {
     const body = await request.json() as { project?: ProjectInput; expectedVersion?: number; audit?: boolean; action?:string; id?:number };
+    if(body.action==="close"&&body.id){
+      const db=await getDb(),[current]=await db.select().from(projects).where(and(eq(projects.id,body.id),isNull(projects.archivedAt))).limit(1);
+      if(!current)return Response.json({error:"项目不存在、已归档或已经结项"},{status:404});
+      const project=JSON.parse(current.payload) as ProjectInput & {services?:ServiceInput[]};
+      const records=await db.select().from(serviceRecords).where(and(eq(serviceRecords.projectId,body.id),isNull(serviceRecords.deletedAt)));
+      const accepted=records.filter(record=>["已验收","已完成"].includes(record.status));
+      const delivered=new Map<number,number>();
+      for(const record of accepted){
+        const payload=JSON.parse(record.payload) as {data?:Record<string,unknown>};
+        delivered.set(record.serviceId,(delivered.get(record.serviceId)??0)+Number(payload.data?.quantity??1));
+      }
+      const blockers:string[]=[];
+      for(const service of project.services??[]){
+        const actual=delivered.get(service.id)??0;
+        if(actual<Number(service.quantity))blockers.push(`${service.name}尚差 ${Number(service.quantity)-actual} ${service.unit??"次"}未验收`);
+      }
+      const pending=records.filter(record=>["待审核","待验收"].includes(record.status));
+      if(pending.length)blockers.push(`仍有 ${pending.length} 条服务记录待审核或待验收`);
+      const missingCost=accepted.filter(record=>record.costAmountSnapshot===null||record.costAmountSnapshot===undefined);
+      if(missingCost.length)blockers.push(`仍有 ${missingCost.length} 条已验收记录缺少成本`);
+      const unpaid=accepted.filter(record=>record.paymentStatus!=="已支付");
+      if(unpaid.length)blockers.push(`仍有 ${unpaid.length} 条已验收记录成本未支付`);
+      const tasks=await db.select().from(deliveryTasks).where(eq(deliveryTasks.projectId,body.id));
+      if(tasks.length){
+        const links=await db.select().from(deliveryTaskRecords).where(inArray(deliveryTaskRecords.taskId,tasks.map(task=>task.id)));
+        const acceptedById=new Map(accepted.map(record=>[record.id,record]));
+        const incomplete=tasks.filter(task=>{
+          const quantity=links.filter(link=>link.taskId===task.id).reduce((sum,link)=>{
+            const record=acceptedById.get(link.recordId);if(!record)return sum;
+            const payload=JSON.parse(record.payload) as {data?:Record<string,unknown>};
+            return sum+Number(payload.data?.quantity??1);
+          },0);
+          return quantity<task.plannedQuantity;
+        });
+        if(incomplete.length)blockers.push(`仍有 ${incomplete.length} 个交付任务未完成`);
+      }
+      if(blockers.length)return Response.json({error:"项目暂不能结项",blockers},{status:409});
+      const now=new Date().toISOString(),payload=clean({...project,status:"已结项"}),nextVersion=current.version+1;
+      const finalRevenue=Number(payload.total??0),finalCost=accepted.reduce((sum,record)=>sum+Number(record.costAmountSnapshot??0),0);
+      const taxRateBasisPoints=600,taxAmount=Math.round(finalRevenue*taxRateBasisPoints/10000),finalProfit=finalRevenue-finalCost-taxAmount;
+      await db.batch([
+        db.update(projects).set({payload:JSON.stringify(payload),version:nextVersion,closedAt:now,closedBy:auth.user.username,archivedAt:now,taxRateBasisPoints,taxAmount,finalRevenue,finalCost,finalProfit,updatedAt:now}).where(eq(projects.id,body.id)),
+        db.insert(projectVersions).values({projectId:body.id,version:nextVersion,payload:JSON.stringify(payload),changedBy:auth.user.username}),
+        db.insert(auditLogs).values({userId:auth.user.id,username:auth.user.username,action:"结项",entityType:"项目",entityId:String(body.id),summary:`项目结项：${project.name??body.id}，收入${finalRevenue}，成本${finalCost}，税费${taxAmount}`,beforePayload:current.payload,afterPayload:JSON.stringify(payload)})
+      ]);
+      return Response.json({closed:true,id:body.id,closedAt:now,finance:{revenue:finalRevenue,cost:finalCost,taxRateBasisPoints,taxAmount,profit:finalProfit}});
+    }
     if(body.action==="restore"&&body.id){
       const db=await getDb(),[current]=await db.select().from(projects).where(eq(projects.id,body.id)).limit(1);
       if(!current)return Response.json({error:"项目不存在"},{status:404});
+      if(current.closedAt)return Response.json({error:"已结项项目不可直接恢复，如需重开请联系系统管理员"},{status:400});
       await db.batch([
         db.update(projects).set({archivedAt:null,updatedAt:sql`CURRENT_TIMESTAMP`}).where(eq(projects.id,body.id)),
         db.insert(auditLogs).values({userId:auth.user.id,username:auth.user.username,action:"恢复",entityType:"项目",entityId:String(body.id),summary:`恢复项目：${JSON.parse(current.payload).name??body.id}`})
@@ -115,6 +164,7 @@ export async function PATCH(request: Request) {
     const db = await getDb();
     const [current] = await db.select().from(projects).where(eq(projects.id, body.project.id)).limit(1);
     if (!current) return Response.json({ error: "项目不存在" }, { status: 404 });
+    if(current.closedAt)return Response.json({error:"已结项项目不可修改"},{status:400});
     if (current.version !== body.expectedVersion) {
       return Response.json({ error: "项目已被其他人更新，请刷新后再修改", current: { ...JSON.parse(current.payload), _version: current.version } }, { status: 409 });
     }
