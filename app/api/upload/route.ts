@@ -3,6 +3,7 @@ import { getDb } from "../../../db";
 import { fileAttachments, formLinks, projects } from "../../../db/schema";
 import { requireApiUser } from "../../auth";
 import { deleteFile, putFile } from "../../file-storage";
+import { canAccessProject } from "../../project-access";
 
 const allowed=new Set([
   "image/jpeg","image/png","application/pdf",
@@ -26,8 +27,9 @@ export async function POST(request:Request){
       uploadedBy=auth.user!.username;
       if(projectId){
         if(!category||!projectCategories.has(category))return Response.json({error:"请选择正确的项目附件分类"},{status:400});
-        const db=await getDb(),[project]=await db.select({id:projects.id,archivedAt:projects.archivedAt}).from(projects).where(eq(projects.id,projectId)).limit(1);
+        const db=await getDb(),[project]=await db.select({id:projects.id,archivedAt:projects.archivedAt,payload:projects.payload}).from(projects).where(eq(projects.id,projectId)).limit(1);
         if(!project||project.archivedAt)return Response.json({error:"项目不存在或已归档"},{status:400});
+        if(!canAccessProject(auth.user!,JSON.parse(project.payload)))return Response.json({error:"无权向该项目上传资料"},{status:403});
       }
     }
     const file=data.get("file");

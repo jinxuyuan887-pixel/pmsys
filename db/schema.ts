@@ -68,6 +68,7 @@ export const formLinks = sqliteTable("form_links", {
   projectId: integer("project_id").notNull(),
   serviceId: integer("service_id").notNull(),
   formType: text("form_type").notNull(),
+  remark: text("remark").notNull().default(""),
   expiresAt: text("expires_at"),
   maxSubmissions: integer("max_submissions").notNull().default(1),
   submissionCount: integer("submission_count").notNull().default(0),
@@ -127,6 +128,13 @@ export const serviceCatalog = sqliteTable("service_catalog", {
   name: text("name").notNull().unique(),
   defaultUnit: text("default_unit").notNull().default("场"),
   category: text("category").notNull().default("其他服务"),
+  enabled: integer("enabled", { mode: "boolean" }).notNull().default(true),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+});
+
+export const projectTags = sqliteTable("project_tags", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  name: text("name").notNull().unique(),
   enabled: integer("enabled", { mode: "boolean" }).notNull().default(true),
   createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
 });

@@ -1,7 +1,8 @@
 import { and, asc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { getDb } from "../../../db";
-import { auditLogs, deliveryTaskRecords, deliveryTasks, projects, projectVersions, serviceRecords, users } from "../../../db/schema";
+import { auditLogs, deliveryTaskRecords, deliveryTasks, projects, projectTags, projectVersions, serviceRecords, users } from "../../../db/schema";
 import { requireApiUser } from "../../auth";
+import { canAccessProject, isAdministrator } from "../../project-access";
 
 type ProjectInput = { id: number; name?: string; manager?:string; managerIds?:number[]; _version?: number; [key: string]: unknown };
 const clean = (project: ProjectInput) => {
@@ -11,7 +12,7 @@ const clean = (project: ProjectInput) => {
   return payload;
 };
 
-type ServiceInput={id:number;name:string;contractDetail?:string;unit?:string;quantity:number;unitPrice:number;costPrice?:number;completed?:number};
+type ServiceInput={id:number;name:string;contractDetail?:string;unit?:string;quantity:number;unitPrice:number;costPrice?:number;completed?:number;billingMode?:"delivery"|"annual-time"};
 function validateProject(project:ProjectInput){
   if(!String(project.name??"").trim())return "请填写项目名称";
   const services=Array.isArray(project.services)?project.services as ServiceInput[]:[];
@@ -20,11 +21,24 @@ function validateProject(project:ProjectInput){
     if(!Number.isFinite(Number(service.quantity))||Number(service.quantity)<=0||Number(service.quantity)>100000)return "服务数量必须大于0且不超过100000";
     if(!Number.isFinite(Number(service.unitPrice))||Number(service.unitPrice)<0||Number(service.unitPrice)>100000000)return "服务单价不符合要求";
     if(!Number.isFinite(Number(service.costPrice??0))||Number(service.costPrice??0)<0)return "成本单价不能为负数";
+    if(!["delivery","annual-time"].includes(String(service.billingMode??"delivery")))return "服务计费方式不正确";
     if(String(service.contractDetail??"").length>500)return "合同详情说明不能超过500字";
   }
   const start=String(project.start??""),end=String(project.end??"");
   if(start&&end&&start>end)return "项目结束日期不能早于开始日期";
+  if(!["P0","P1","P2"].includes(String(project.priority??"P1")))return "项目优先级不正确";
+  if(Array.isArray(project.tags)&&project.tags.some(tag=>typeof tag!=="string"||tag.length>30))return "项目标签不正确";
+  if(String(project.presalesWork??"").length>1000)return "售前工作内容不能超过1000字";
+  if(String(project.financialContractNo??"").length>100)return "财务合同编号不能超过100字";
   return null;
+}
+
+async function validateProjectTags(db:Awaited<ReturnType<typeof getDb>>,project:ProjectInput,existingTags:string[]=[]){
+  const submitted=Array.isArray(project.tags)?Array.from(new Set(project.tags.map(String))):[];
+  if(!submitted.length)return null;
+  const rows=await db.select().from(projectTags).where(inArray(projectTags.name,submitted));
+  const allowed=new Set(rows.filter(tag=>tag.enabled||existingTags.includes(tag.name)).map(tag=>tag.name));
+  return submitted.every(tag=>allowed.has(tag))?null:"项目只能选择标签库中已启用的标签";
 }
 
 async function normalizeProjectManagers(db:Awaited<ReturnType<typeof getDb>>,project:ProjectInput){
@@ -34,7 +48,7 @@ async function normalizeProjectManagers(db:Awaited<ReturnType<typeof getDb>>,pro
   const legacyNames=submittedIds.length===0
     ? String(project.manager??"").split(/[、,，]/).map(name=>name.trim()).filter(Boolean)
     : [];
-  const conditions=[eq(users.role,"项目经理"),eq(users.active,true)];
+  const conditions=[eq(users.active,true)];
   const managerRows=submittedIds.length
     ? await db.select({id:users.id,name:users.name}).from(users).where(and(...conditions,inArray(users.id,submittedIds)))
     : legacyNames.length
@@ -56,9 +70,10 @@ export async function GET(request: Request) {
   try {
     const db = await getDb();
     const includeArchived=new URL(request.url).searchParams.get("includeArchived")==="1";
-    const rows = includeArchived
+    const allRows = includeArchived
       ? await db.select().from(projects).orderBy(asc(projects.id))
       : await db.select().from(projects).where(isNull(projects.archivedAt)).orderBy(asc(projects.id));
+    const rows=isAdministrator(auth.user!)?allRows:allRows.filter(row=>canAccessProject(auth.user!,JSON.parse(row.payload)));
     const delivered=await db.select({
       projectId:serviceRecords.projectId,
       serviceId:serviceRecords.serviceId,
@@ -81,9 +96,11 @@ export async function POST(request: Request) {
     if (!body.project?.id) return Response.json({ error: "project is required" }, { status: 400 });
     const validation=validateProject(body.project);if(validation)return Response.json({error:validation},{status:400});
     const db = await getDb();
+    const tagError=await validateProjectTags(db,body.project);if(tagError)return Response.json({error:tagError},{status:400});
     const normalized=await normalizeProjectManagers(db,body.project);
     if("error" in normalized)return Response.json({error:normalized.error},{status:400});
     const project=normalized.project;
+    if(!isAdministrator(auth.user)&&!canAccessProject(auth.user,project))return Response.json({error:"项目经理新建项目时必须将本人设为项目经理"},{status:403});
     const payload = JSON.stringify(clean(project));
     const [existing] = await db.select({ id: projects.id }).from(projects).where(eq(projects.id, body.project.id)).limit(1);
     if (existing) return Response.json({ error: "项目编号已存在，请刷新后重试" }, { status: 409 });
@@ -106,6 +123,7 @@ export async function PATCH(request: Request) {
       const db=await getDb(),[current]=await db.select().from(projects).where(and(eq(projects.id,body.id),isNull(projects.archivedAt))).limit(1);
       if(!current)return Response.json({error:"项目不存在、已归档或已经结项"},{status:404});
       const project=JSON.parse(current.payload) as ProjectInput & {services?:ServiceInput[]};
+      if(!canAccessProject(auth.user,project))return Response.json({error:"无权操作该项目"},{status:403});
       const records=await db.select().from(serviceRecords).where(and(eq(serviceRecords.projectId,body.id),isNull(serviceRecords.deletedAt)));
       const accepted=records.filter(record=>["已验收","已完成"].includes(record.status));
       const delivered=new Map<number,number>();
@@ -115,11 +133,15 @@ export async function PATCH(request: Request) {
       }
       const blockers:string[]=[];
       for(const service of project.services??[]){
+        if(service.billingMode==="annual-time"){
+          if(String(project.end??"")>new Date().toISOString().slice(0,10))blockers.push(`${service.name}为年包按时间确认收入，项目尚未到期`);
+          continue;
+        }
         const actual=delivered.get(service.id)??0;
         if(actual<Number(service.quantity))blockers.push(`${service.name}尚差 ${Number(service.quantity)-actual} ${service.unit??"次"}未验收`);
       }
-      const pending=records.filter(record=>["待审核","待验收"].includes(record.status));
-      if(pending.length)blockers.push(`仍有 ${pending.length} 条服务记录待审核或待验收`);
+      const pending=records.filter(record=>["待填写","待审核","待验收"].includes(record.status));
+      if(pending.length)blockers.push(`仍有 ${pending.length} 条服务记录待填写或待验收`);
       const missingCost=accepted.filter(record=>record.costAmountSnapshot===null||record.costAmountSnapshot===undefined);
       if(missingCost.length)blockers.push(`仍有 ${missingCost.length} 条已验收记录缺少成本`);
       const unpaid=accepted.filter(record=>record.paymentStatus!=="已支付");
@@ -152,6 +174,7 @@ export async function PATCH(request: Request) {
     if(body.action==="restore"&&body.id){
       const db=await getDb(),[current]=await db.select().from(projects).where(eq(projects.id,body.id)).limit(1);
       if(!current)return Response.json({error:"项目不存在"},{status:404});
+      if(!canAccessProject(auth.user,JSON.parse(current.payload)))return Response.json({error:"无权操作该项目"},{status:403});
       if(current.closedAt)return Response.json({error:"已结项项目不可直接恢复，如需重开请联系系统管理员"},{status:400});
       await db.batch([
         db.update(projects).set({archivedAt:null,updatedAt:sql`CURRENT_TIMESTAMP`}).where(eq(projects.id,body.id)),
@@ -164,6 +187,9 @@ export async function PATCH(request: Request) {
     const db = await getDb();
     const [current] = await db.select().from(projects).where(eq(projects.id, body.project.id)).limit(1);
     if (!current) return Response.json({ error: "项目不存在" }, { status: 404 });
+    const currentPayload=JSON.parse(current.payload) as ProjectInput;
+    const tagError=await validateProjectTags(db,body.project,Array.isArray(currentPayload.tags)?currentPayload.tags as string[]:[]);if(tagError)return Response.json({error:tagError},{status:400});
+    if(!canAccessProject(auth.user,currentPayload))return Response.json({error:"无权操作该项目"},{status:403});
     if(current.closedAt)return Response.json({error:"已结项项目不可修改"},{status:400});
     if (current.version !== body.expectedVersion) {
       return Response.json({ error: "项目已被其他人更新，请刷新后再修改", current: { ...JSON.parse(current.payload), _version: current.version } }, { status: 409 });
@@ -192,6 +218,7 @@ export async function DELETE(request: Request) {
     const db = await getDb();
     const [current] = await db.select().from(projects).where(eq(projects.id, id)).limit(1);
     if (!current) return Response.json({ error: "项目不存在" }, { status: 404 });
+    if(!canAccessProject(auth.user!,JSON.parse(current.payload)))return Response.json({error:"无权操作该项目"},{status:403});
     const archivedAt=new Date().toISOString();
     await db.batch([
       db.update(projects).set({archivedAt,updatedAt:sql`CURRENT_TIMESTAMP`}).where(eq(projects.id,id)),
