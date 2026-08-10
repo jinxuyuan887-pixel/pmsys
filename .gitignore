@@ -41,6 +41,7 @@ next-env.d.ts
 /.sites-runtime/
 /outputs/
 /work/
+/.secrets/
 
 # This repository uses npm and package-lock.json as the single dependency lock.
 /pnpm-lock.yaml

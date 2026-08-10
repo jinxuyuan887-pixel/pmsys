@@ -14,7 +14,8 @@
     "validate:artifact": "bash scripts/validate-artifact.sh",
     "lint": "bash scripts/sites-env.sh -- eslint . --ignore-pattern dist --ignore-pattern .next",
     "release:check": "npm run lint && npm test",
-    "db:generate": "bash scripts/sites-env.sh -- drizzle-kit generate"
+    "db:generate": "bash scripts/sites-env.sh -- drizzle-kit generate",
+    "api-token:create": "bash scripts/sites-env.sh -- node scripts/create-analytics-token.mjs"
   },
   "dependencies": {
     "better-sqlite3": "13.0.2",
