@@ -165,3 +165,15 @@ export const loginAttempts = sqliteTable("login_attempts", {
   succeeded: integer("succeeded", { mode: "boolean" }).notNull().default(false),
   createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
 });
+
+export const apiTokens = sqliteTable("api_tokens", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  name: text("name").notNull(),
+  tokenHash: text("token_hash").notNull().unique(),
+  scopes: text("scopes").notNull().default("analytics:read"),
+  userId: integer("user_id"),
+  active: integer("active", { mode: "boolean" }).notNull().default(true),
+  expiresAt: text("expires_at"),
+  lastUsedAt: text("last_used_at"),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+});
