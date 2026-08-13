@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { appPath } from "../base-path";
+import { roundMoney } from "../money";
 import { recordTypeForServiceName } from "../service-record-types";
 
 type Service = {
@@ -111,7 +112,7 @@ function projectHasManager(project:Project,manager:string){
 }
 
 function money(value: number) {
-  return `¥${value.toLocaleString("zh-CN")}`;
+  return `¥${roundMoney(value).toLocaleString("zh-CN",{minimumFractionDigits:2,maximumFractionDigits:2})}`;
 }
 const recordStartDate=(data?:Record<string,unknown>)=>String(data?.startDate??data?.date??"");
 const recordEndDate=(data?:Record<string,unknown>)=>String(data?.endDate??data?.startDate??data?.date??"");
@@ -170,9 +171,9 @@ export default function DashboardApp({currentUser}:{currentUser:CurrentUser}) {
     const approved=records.filter(record=>record.projectId===project.id&&isAcceptedRecord(record));
     const annualServiceIds=new Set(project.services.filter(service=>service.billingMode==="annual-time").map(service=>service.id));
     const deliveryRevenue=approved.filter(record=>!annualServiceIds.has(record.serviceId)).reduce((sum,record)=>sum+(record.amountSnapshot??0),0);
-    const annualRevenue=project.services.filter(service=>service.billingMode==="annual-time").reduce((sum,service)=>sum+Math.round(service.quantity*service.unitPrice*timeProgress(project)/100),0);
-    const revenue=deliveryRevenue+annualRevenue;
-    const cost=approved.reduce((sum,record)=>sum+(record.costAmountSnapshot??0),0);
+    const annualRevenue=project.services.filter(service=>service.billingMode==="annual-time").reduce((sum,service)=>sum+roundMoney(service.quantity*service.unitPrice*timeProgress(project)/100),0);
+    const revenue=roundMoney(deliveryRevenue+annualRevenue);
+    const cost=roundMoney(approved.reduce((sum,record)=>sum+(record.costAmountSnapshot??0),0));
     const missingCost=approved.some(record=>record.costAmountSnapshot===null||record.costAmountSnapshot===undefined);
     return {revenue,cost,missingCost,profitRate:revenue>0&&!missingCost?(revenue-cost)/revenue*100:null};
   };
@@ -312,7 +313,7 @@ export default function DashboardApp({currentUser}:{currentUser:CurrentUser}) {
       manager: projectManagerAccounts.filter(manager=>form.getAll("managerIds").map(Number).includes(manager.id)).map(manager=>manager.name).join("、"),
       contract: String(form.get("contract")),
       financialContractNo: String(form.get("financialContractNo")??"").trim(),
-      total: submittedServices.reduce((sum, item) => sum + item.quantity * item.unitPrice, 0),
+      total: roundMoney(submittedServices.reduce((sum, item) => sum + item.quantity * item.unitPrice, 0)),
       start: String(form.get("start")),
       end: String(form.get("end")),
       status: String(form.get("status")) as Project["status"],
@@ -498,7 +499,7 @@ export default function DashboardApp({currentUser}:{currentUser:CurrentUser}) {
         {selected && (
           <section className="detail-layout">
             <button className="back" onClick={()=>setSelectedId(null)}>← 返回项目列表</button>
-            {selected._archivedAt&&<div className="catalog-note">{selected._closedAt?`该项目已于 ${new Date(selected._closedAt).toLocaleDateString("zh-CN")} 结项归档。税费 ${money(selected._taxAmount??0)}，最终利润 ${money(selected._finalProfit??0)}。`:"该项目已归档，目前仅供查看。如需继续交付，请先在“已归档”清单中恢复项目。"}</div>}
+            {selected._archivedAt&&<div className="catalog-note">{selected._closedAt?`该项目已于 ${new Date(selected._closedAt).toLocaleDateString("zh-CN")} 结项归档。${selected._taxRateBasisPoints===600?`增值税成本（6%）${money(selected._taxAmount??0)}`:"未增加增值税成本"}，最终利润 ${money(selected._finalProfit??0)}。`:"该项目已归档，目前仅供查看。如需继续交付，请先在“已归档”清单中恢复项目。"}</div>}
             <div className="detail-summary">
               <div><small>项目总价</small><strong>{money(selected.total)}</strong></div>
               <div><small>服务执行进度</small><strong>{projectProgress(selected)}%</strong></div>
@@ -620,8 +621,8 @@ function ProjectForm({editing,catalog,tagLibrary,projectManagers,currentUser,onS
           <select value={item.billingMode??"delivery"} onChange={e=>updateService(item.id,"billingMode",e.target.value)}><option value="delivery">按交付验收</option><option value="annual-time">年包按时间确认</option></select>
           <select value={item.unit} onChange={e=>updateService(item.id,"unit",e.target.value)}><option>场</option><option>人次</option><option>小时</option><option>天</option><option>期</option><option>份</option></select>
           <input type="number" min="1" value={item.quantity} onChange={e=>updateService(item.id,"quantity",e.target.value)}/>
-          <input type="number" min="0" placeholder="填写销售单价" value={item.unitPrice===0?"":item.unitPrice} onChange={e=>updateService(item.id,"unitPrice",e.target.value)}/>
-          <input type="number" min="0" placeholder="填写成本单价" value={(item.costPrice??0)===0?"":item.costPrice} onChange={e=>updateService(item.id,"costPrice",e.target.value)}/>
+          <input type="number" min="0" step="0.01" placeholder="填写销售单价" value={item.unitPrice===0?"":item.unitPrice} onChange={e=>updateService(item.id,"unitPrice",e.target.value)}/>
+          <input type="number" min="0" step="0.01" placeholder="填写成本单价" value={(item.costPrice??0)===0?"":item.costPrice} onChange={e=>updateService(item.id,"costPrice",e.target.value)}/>
           <strong>{money(item.quantity*item.unitPrice)}</strong>
           <button type="button" disabled={services.length===1} onClick={()=>setServices(items=>items.filter(x=>x.id!==item.id))}>×</button>
         </div>)}
@@ -637,7 +638,7 @@ function ServiceForm({catalog,onSave}:{catalog:ServiceTemplate[];onSave:(d:FormD
     <div className="form-grid"><label className="full">服务大类<select name="name" required>{catalog.filter(x=>x.enabled).map(item=><option key={item.id}>{item.name}</option>)}</select></label>
       <label className="full">合同详情说明<input name="contractDetail" required maxLength={500} placeholder="标注合同约定的具体服务细项"/></label>
       <label>计量单位<select name="unit"><option>场</option><option>人次</option><option>小时</option><option>天</option><option>期</option><option>份</option></select></label>
-      <label>服务数量<input name="quantity" type="number" min="1" required/></label><label>服务单价（元）<input name="unitPrice" type="number" min="0" required placeholder="填写销售单价"/></label><label>成本单价（元）<input name="costPrice" type="number" min="0" placeholder="填写成本单价"/></label>
+      <label>服务数量<input name="quantity" type="number" min="1" required/></label><label>服务单价（元）<input name="unitPrice" type="number" min="0" step="0.01" required placeholder="填写销售单价"/></label><label>成本单价（元）<input name="costPrice" type="number" min="0" step="0.01" placeholder="填写成本单价"/></label>
       <label>计费方式<select name="billingMode"><option value="delivery">按交付验收</option><option value="annual-time">年包按时间确认收入</option></select></label>
       <label className="full">自定义字段<div className="custom-field-row"><input placeholder="字段名称"/><select><option>文本</option><option>数字</option><option>日期</option><option>金额</option><option>文件</option></select><button type="button">＋ 添加字段</button></div></label></div>
     <div className="modal-actions"><button type="button">取消</button><button className="primary" type="submit">确认添加</button></div>
@@ -1123,10 +1124,11 @@ function ProjectAttachments({projectId}:{projectId:number}){
 function ProjectClosureDialog({project,records,notify,close,onClosed}:{project:Project;records:ServiceRecord[];notify:(message:string)=>void;close:()=>void;onClosed:()=>Promise<void>}){
   const [submitting,setSubmitting]=useState(false);
   const [serverBlockers,setServerBlockers]=useState<string[]>([]);
+  const [includeVatCost,setIncludeVatCost]=useState(true);
   const accepted=records.filter(isAcceptedRecord),pending=records.filter(record=>["待填写","待审核","待验收"].includes(record.status));
   const unpaid=accepted.filter(record=>record.paymentStatus!=="已支付"),missingCost=accepted.filter(record=>record.costAmountSnapshot===null||record.costAmountSnapshot===undefined);
-  const revenue=project.services.reduce((sum,service)=>sum+service.quantity*service.unitPrice,0);
-  const cost=accepted.reduce((sum,record)=>sum+Number(record.costAmountSnapshot??0),0),tax=Math.round(revenue*0.06),profit=revenue-cost-tax;
+  const revenue=roundMoney(project.services.reduce((sum,service)=>sum+service.quantity*service.unitPrice,0));
+  const cost=roundMoney(accepted.reduce((sum,record)=>sum+Number(record.costAmountSnapshot??0),0)),tax=includeVatCost?roundMoney(revenue*0.06):0,profit=roundMoney(revenue-cost-tax);
   const satisfactionScores=accepted.map(record=>Number(record.payload.data?.satisfaction)).filter(Number.isFinite);
   const averageSatisfaction=satisfactionScores.length?satisfactionScores.reduce((sum,value)=>sum+value,0)/satisfactionScores.length:null;
   async function uploadCategory(files:FormDataEntryValue[],category:string){
@@ -1143,15 +1145,15 @@ function ProjectClosureDialog({project,records,notify,close,onClosed}:{project:P
       await uploadCategory(form.getAll("resultFiles"),"成果报告");
       await uploadCategory(form.getAll("invoiceFiles"),"发票");
       await uploadCategory(form.getAll("evaluationFiles"),"客户评价");
-      const response=await fetch(appPath("/api/projects"),{method:"PATCH",headers:{"content-type":"application/json"},body:JSON.stringify({action:"close",id:project.id})});
+      const response=await fetch(appPath("/api/projects"),{method:"PATCH",headers:{"content-type":"application/json"},body:JSON.stringify({action:"close",id:project.id,includeVatCost})});
       const data=await response.json().catch(()=>({})) as {error?:string;blockers?:string[]};
       if(!response.ok){setServerBlockers(data.blockers??[data.error??"项目暂不能结项"]);setSubmitting(false);return}
-      await onClosed();notify("项目已结项归档，税费和最终利润已冻结");
+      await onClosed();notify(`项目已结项归档，${includeVatCost?"6%增值税成本和":""}最终利润已冻结`);
     }catch(error){notify(error instanceof Error?error.message:"结项失败，请重试");setSubmitting(false)}
   }
-  return <form action={submit} className="closure-dialog"><div className="modal-title"><h2>项目结项</h2><p>系统将校验交付、验收、任务和成本支付状态，并按项目总价自动核算6%税费。</p></div>
+  return <form action={submit} className="closure-dialog"><div className="modal-title"><h2>项目结项</h2><p>系统将校验交付、验收、任务和成本支付状态，并按本次选择冻结最终财务结果。</p></div>
     <div className="closure-checks"><div><small>服务进度</small><strong>{projectProgress(project)}%</strong><Status value={isProjectFinished(project)?"已完成":"未完成"}/></div><div><small>待处理记录</small><strong>{pending.length} 条</strong><Status value={pending.length?"待处理":"正常"}/></div><div><small>项目平均满意度</small><strong>{averageSatisfaction===null?"暂无评分":`${averageSatisfaction.toFixed(2)} / 10`}</strong><Status value={satisfactionScores.length?"已汇总":"选填"}/></div><div><small>未支付成本</small><strong>{unpaid.length} 条</strong><Status value={unpaid.length?"待支付":"已支付"}/></div><div><small>缺少成本</small><strong>{missingCost.length} 条</strong><Status value={missingCost.length?"待补充":"正常"}/></div></div>
-    <section className="closure-finance"><h3>结项财务预览</h3><div><span>项目收入<strong>{money(revenue)}</strong></span><span>服务成本<strong>{money(cost)}</strong></span><span>税费（6%）<strong>{money(tax)}</strong></span><span>预计利润<strong>{money(profit)}</strong></span></div></section>
+    <section className="closure-finance"><h3>结项财务预览</h3><label className="vat-cost-option"><input type="checkbox" checked={includeVatCost} onChange={event=>setIncludeVatCost(event.target.checked)}/><span><strong>增加增值税成本（6%）</strong><small>勾选后按项目收入的 6% 计入增值税成本，并从最终利润中扣除</small></span></label><div><span>项目收入<strong>{money(revenue)}</strong></span><span>服务成本<strong>{money(cost)}</strong></span><span>增值税成本<strong>{money(tax)}</strong></span><span>预计利润<strong>{money(profit)}</strong></span></div></section>
     <section className="closure-files"><h3>结项资料</h3><div className="form-grid"><label>成果报告<input name="resultFiles" type="file" multiple accept=".pdf,.ppt,.pptx,.doc,.docx,.xls,.xlsx,.jpg,.jpeg,.png"/></label><label>发票<input name="invoiceFiles" type="file" multiple accept=".pdf,.jpg,.jpeg,.png"/></label><label className="full">客户评价<input name="evaluationFiles" type="file" multiple accept=".pdf,.doc,.docx,.jpg,.jpeg,.png"/></label></div><ProjectAttachments projectId={project.id}/></section>
     {serverBlockers.length>0&&<div className="closure-blockers"><strong>暂不能结项，请先处理：</strong><ul>{serverBlockers.map(blocker=><li key={blocker}>{blocker}</li>)}</ul></div>}
     <div className="modal-actions"><button type="button" onClick={close}>取消</button><button className="primary" disabled={submitting}>{submitting?"正在校验并结项…":"确认结项并归档"}</button></div>

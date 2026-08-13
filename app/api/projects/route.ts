@@ -2,12 +2,13 @@ import { and, asc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { getDb } from "../../../db";
 import { auditLogs, deliveryTaskRecords, deliveryTasks, projects, projectTags, projectVersions, serviceRecords, users } from "../../../db/schema";
 import { requireApiUser } from "../../auth";
+import { hasCentPrecision, roundMoney } from "../../money";
 import { canAccessProject, isAdministrator } from "../../project-access";
 
 type ProjectInput = { id: number; name?: string; manager?:string; managerIds?:number[]; _version?: number; [key: string]: unknown };
 const clean = (project: ProjectInput) => {
   const services=Array.isArray(project.services)?project.services as ServiceInput[]:[];
-  const payload = { ...project, total:services.reduce((sum,service)=>sum+Number(service.quantity)*Number(service.unitPrice),0) };
+  const payload = { ...project, total:roundMoney(services.reduce((sum,service)=>sum+Number(service.quantity)*Number(service.unitPrice),0)) };
   delete payload._version;
   return payload;
 };
@@ -19,8 +20,8 @@ function validateProject(project:ProjectInput){
   for(const service of services){
     if(!Number.isSafeInteger(Number(service.id))||!String(service.name??"").trim())return "服务内容信息不完整";
     if(!Number.isFinite(Number(service.quantity))||Number(service.quantity)<=0||Number(service.quantity)>100000)return "服务数量必须大于0且不超过100000";
-    if(!Number.isFinite(Number(service.unitPrice))||Number(service.unitPrice)<0||Number(service.unitPrice)>100000000)return "服务单价不符合要求";
-    if(!Number.isFinite(Number(service.costPrice??0))||Number(service.costPrice??0)<0)return "成本单价不能为负数";
+    if(!Number.isFinite(Number(service.unitPrice))||Number(service.unitPrice)<0||Number(service.unitPrice)>100000000||!hasCentPrecision(Number(service.unitPrice)))return "服务单价必须为0或正数，且最多保留两位小数";
+    if(!Number.isFinite(Number(service.costPrice??0))||Number(service.costPrice??0)<0||!hasCentPrecision(Number(service.costPrice??0)))return "成本单价必须为0或正数，且最多保留两位小数";
     if(!["delivery","annual-time"].includes(String(service.billingMode??"delivery")))return "服务计费方式不正确";
     if(String(service.contractDetail??"").length>500)return "合同详情说明不能超过500字";
   }
@@ -82,7 +83,7 @@ export async function GET(request: Request) {
     const totals=new Map(delivered.map(item=>[`${item.projectId}:${item.serviceId}`,Number(item.quantity)||0]));
     return Response.json({ projects: rows.map(row => {
       const project=JSON.parse(row.payload) as {services?:ServiceInput[]};
-      return {...project,total:(project.services??[]).reduce((sum,service)=>sum+Number(service.quantity)*Number(service.unitPrice),0),services:(project.services??[]).map(service=>({...service,completed:totals.get(`${row.id}:${service.id}`)??0})),_version:row.version,_archivedAt:row.archivedAt,_closedAt:row.closedAt,_closedBy:row.closedBy,_taxRateBasisPoints:row.taxRateBasisPoints,_taxAmount:row.taxAmount,_finalRevenue:row.finalRevenue,_finalCost:row.finalCost,_finalProfit:row.finalProfit,_isDemo:row.isDemo};
+      return {...project,total:roundMoney((project.services??[]).reduce((sum,service)=>sum+Number(service.quantity)*Number(service.unitPrice),0)),services:(project.services??[]).map(service=>({...service,completed:totals.get(`${row.id}:${service.id}`)??0})),_version:row.version,_archivedAt:row.archivedAt,_closedAt:row.closedAt,_closedBy:row.closedBy,_taxRateBasisPoints:row.taxRateBasisPoints,_taxAmount:row.taxAmount,_finalRevenue:row.finalRevenue,_finalCost:row.finalCost,_finalProfit:row.finalProfit,_isDemo:row.isDemo};
     }) });
   } catch (error) {
     return Response.json({ error: error instanceof Error ? error.message : "读取项目失败" }, { status: 500 });
@@ -118,7 +119,7 @@ export async function POST(request: Request) {
 export async function PATCH(request: Request) {
   const auth = await requireApiUser(request); if (auth.response || !auth.user) return auth.response;
   try {
-    const body = await request.json() as { project?: ProjectInput; expectedVersion?: number; audit?: boolean; action?:string; id?:number };
+    const body = await request.json() as { project?: ProjectInput; expectedVersion?: number; audit?: boolean; action?:string; id?:number; includeVatCost?:boolean };
     if(body.action==="close"&&body.id){
       const db=await getDb(),[current]=await db.select().from(projects).where(and(eq(projects.id,body.id),isNull(projects.archivedAt))).limit(1);
       if(!current)return Response.json({error:"项目不存在、已归档或已经结项"},{status:404});
@@ -162,12 +163,13 @@ export async function PATCH(request: Request) {
       }
       if(blockers.length)return Response.json({error:"项目暂不能结项",blockers},{status:409});
       const now=new Date().toISOString(),payload=clean({...project,status:"已结项"}),nextVersion=current.version+1;
-      const finalRevenue=Number(payload.total??0),finalCost=accepted.reduce((sum,record)=>sum+Number(record.costAmountSnapshot??0),0);
-      const taxRateBasisPoints=600,taxAmount=Math.round(finalRevenue*taxRateBasisPoints/10000),finalProfit=finalRevenue-finalCost-taxAmount;
+      const finalRevenue=roundMoney(Number(payload.total??0)),finalCost=roundMoney(accepted.reduce((sum,record)=>sum+Number(record.costAmountSnapshot??0),0));
+      const includeVatCost=body.includeVatCost!==false;
+      const taxRateBasisPoints=includeVatCost?600:0,taxAmount=includeVatCost?roundMoney(finalRevenue*taxRateBasisPoints/10000):0,finalProfit=roundMoney(finalRevenue-finalCost-taxAmount);
       await db.batch([
         db.update(projects).set({payload:JSON.stringify(payload),version:nextVersion,closedAt:now,closedBy:auth.user.username,archivedAt:now,taxRateBasisPoints,taxAmount,finalRevenue,finalCost,finalProfit,updatedAt:now}).where(eq(projects.id,body.id)),
         db.insert(projectVersions).values({projectId:body.id,version:nextVersion,payload:JSON.stringify(payload),changedBy:auth.user.username}),
-        db.insert(auditLogs).values({userId:auth.user.id,username:auth.user.username,action:"结项",entityType:"项目",entityId:String(body.id),summary:`项目结项：${project.name??body.id}，收入${finalRevenue}，成本${finalCost}，税费${taxAmount}`,beforePayload:current.payload,afterPayload:JSON.stringify(payload)})
+        db.insert(auditLogs).values({userId:auth.user.id,username:auth.user.username,action:"结项",entityType:"项目",entityId:String(body.id),summary:`项目结项：${project.name??body.id}，收入${finalRevenue}，成本${finalCost}，${includeVatCost?`增值税成本${taxAmount}`:"未增加增值税成本"}`,beforePayload:current.payload,afterPayload:JSON.stringify(payload)})
       ]);
       return Response.json({closed:true,id:body.id,closedAt:now,finance:{revenue:finalRevenue,cost:finalCost,taxRateBasisPoints,taxAmount,profit:finalProfit}});
     }

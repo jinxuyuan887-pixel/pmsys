@@ -243,17 +243,24 @@ test("external forms use the selected record type and defer full validation to a
   assert.match(route, /咨询时长必须大于0且不超过1440分钟/);
 });
 
-test("P0 acceptance, payment, automatic totals, and project closure are enforced", async () => {
+test("P0 acceptance, payment, cent-precision amounts, and selectable VAT project closure are enforced", async () => {
   const dashboard = await read("app/ui/DashboardApp.tsx");
   const projectRoute = await read("app/api/projects/route.ts");
   const recordsRoute = await read("app/api/records/route.ts");
+  const money = await read("app/money.ts");
   const uploadRoute = await read("app/api/upload/route.ts");
   const migration = await read("drizzle/0012_acceptance_payment_closure.sql");
   assert.match(dashboard, /function ProjectClosureDialog/);
   assert.match(dashboard, /验收后更新项目进度/);
   assert.match(dashboard, /确认支付/);
   assert.match(projectRoute, /action==="close"/);
-  assert.match(projectRoute, /taxRateBasisPoints=600/);
+  assert.match(projectRoute, /includeVatCost=body\.includeVatCost!==false/);
+  assert.match(projectRoute, /taxRateBasisPoints=includeVatCost\?600:0/);
+  assert.match(dashboard, /增加增值税成本（6%）/);
+  assert.match(dashboard, /minimumFractionDigits:2,maximumFractionDigits:2/);
+  assert.match(dashboard, /step="0\.01"/);
+  assert.match(recordsRoute, /roundMoney\(unitPrice\*quantityOf/);
+  assert.match(money, /Math\.round\(\(value \+ Number\.EPSILON\) \* 100\) \/ 100/);
   assert.match(projectRoute, /已验收记录成本未支付/);
   assert.match(recordsRoute, /action==="payment"/);
   assert.match(recordsRoute, /refreshLinkedTasks/);
