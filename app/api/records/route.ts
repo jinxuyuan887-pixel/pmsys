@@ -2,6 +2,7 @@ import { and, desc, eq, gte, inArray, isNull, lte, sql } from "drizzle-orm";
 import { getDb } from "../../../db";
 import { auditLogs, deliveryTaskRecords, deliveryTasks, fileAttachments, formLinks, projects, serviceRecords } from "../../../db/schema";
 import { requireApiUser } from "../../auth";
+import { roundMoney } from "../../money";
 import type { CurrentUser } from "../../auth";
 import { canAccessProject } from "../../project-access";
 import { recordTypeForServiceName } from "../../service-record-types";
@@ -196,8 +197,8 @@ export async function PATCH(request:Request){
     const profitRate=unitPrice&&costUnit!==null?Math.round((unitPrice-costUnit)/unitPrice*10000):null;
     const [record]=await db.update(serviceRecords).set({
       status:nextStatus,projectId,serviceId,recordType:type,serviceDate:dateOf(nextPayload.data),payload:JSON.stringify(nextPayload),
-      unitPriceSnapshot:unitPrice,amountSnapshot:unitPrice===null?null:Math.round(unitPrice*quantityOf(nextPayload.data)),
-      costUnitSnapshot:costUnit,costAmountSnapshot:costUnit===null?null:Math.round(costUnit*quantityOf(nextPayload.data)),profitRateBasisPoints:profitRate,
+      unitPriceSnapshot:unitPrice,amountSnapshot:unitPrice===null?null:roundMoney(unitPrice*quantityOf(nextPayload.data)),
+      costUnitSnapshot:costUnit,costAmountSnapshot:costUnit===null?null:roundMoney(costUnit*quantityOf(nextPayload.data)),profitRateBasisPoints:profitRate,
       updatedAt:now,approvedAt:isAccepted(nextStatus)?(isAccepted(current.status)?current.approvedAt??now:now):null
     }).where(eq(serviceRecords.id,body.id)).returning();
     await db.insert(auditLogs).values({userId:auth.user.id,username:auth.user.username,action:body.status==="已验收"?"验收通过":body.status==="待验收"?"审核通过":"修改",entityType:"服务记录",entityId:String(body.id),summary:body.status?`${body.status}：${record.recordType}`:`修改${record.recordType}`,beforePayload:current.payload,afterPayload:record.payload});
