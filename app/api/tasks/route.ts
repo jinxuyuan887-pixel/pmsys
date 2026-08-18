@@ -76,7 +76,12 @@ export async function GET(request:Request){
       const taskRecords=links.filter(link=>link.taskId===task.id).map(link=>recordsById.get(link.recordId)).filter(Boolean) as Array<{status:string;payload:unknown}>;
       return {...task,status:derivedTaskStatus(task.plannedQuantity,taskRecords),recordIds:links.filter(link=>link.taskId===task.id).map(link=>link.recordId),records:taskRecords};
     });
-    return Response.json({tasks:derivedTasks.filter(task=>status==="completed"?task.status==="已完成":status==="incomplete"?task.status!=="已完成":true)});
+    const completed=derivedTasks.filter(task=>task.status==="已完成").length;
+    const pendingRecords=derivedTasks.reduce((sum,task)=>sum+task.records.filter(record=>["待填写","待审核","待验收"].includes(record.status)).length,0);
+    return Response.json({
+      tasks:derivedTasks.filter(task=>status==="completed"?task.status==="已完成":status==="incomplete"?task.status!=="已完成":true),
+      summary:{total:derivedTasks.length,completed,incomplete:derivedTasks.length-completed,pendingRecords}
+    });
   }catch(error){return Response.json({error:error instanceof Error?error.message:"读取任务失败"},{status:500})}
 }
 

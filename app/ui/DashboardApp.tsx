@@ -786,7 +786,8 @@ function TaskManagement({projects,records,currentUser,managers,notify,onAddRecor
   notify:(message:string)=>void;onAddRecord:(task:DeliveryTask)=>void;onReview:(record:ServiceRecord)=>void;onAccept:(record:ServiceRecord)=>void;onView:(record:ServiceRecord)=>void;
 }){
   const [tasks,setTasks]=useState<DeliveryTask[]>([]);
-  const [status,setStatus]=useState<"all"|"completed"|"incomplete">("all");
+  const [status,setStatus]=useState<"all"|"completed"|"incomplete">("incomplete");
+  const [summary,setSummary]=useState({total:0,completed:0,incomplete:0,pendingRecords:0});
   const [start,setStart]=useState(""),[end,setEnd]=useState("");
   const [editing,setEditing]=useState<DeliveryTask|null>(null);
   const [showForm,setShowForm]=useState(false);
@@ -795,7 +796,7 @@ function TaskManagement({projects,records,currentUser,managers,notify,onAddRecor
     const query=new URLSearchParams({status});
     if(start)query.set("start",start);if(end)query.set("end",end);
     const response=await fetch(appPath(`/api/tasks?${query}`),{cache:"no-store"});
-    if(response.ok){const data=await response.json() as {tasks?:DeliveryTask[]};setTasks(data.tasks??[])}
+    if(response.ok){const data=await response.json() as {tasks?:DeliveryTask[];summary?:typeof summary};setTasks(data.tasks??[]);setSummary(data.summary??{total:0,completed:0,incomplete:0,pendingRecords:0})}
   },[end,start,status]);
   useEffect(()=>{const timer=window.setTimeout(()=>void load(),0);return()=>window.clearTimeout(timer)},[load,recordsSignature]);
   const projectFor=(task:DeliveryTask)=>projects.find(project=>project.id===task.projectId);
@@ -812,15 +813,19 @@ function TaskManagement({projects,records,currentUser,managers,notify,onAddRecor
     if(!response.ok){notify("任务删除失败");return}
     await load();notify("任务已删除，关联服务记录已保留");
   }
-  const completed=tasks.filter(task=>task.status==="已完成").length;
   return <section className="content-card task-management">
     <div className="section-title"><div><h2>项目经理任务管理</h2><p>任务按项目管理，可关联多条、多类服务；关联记录全部验收后自动完成</p></div><button className="primary" onClick={()=>{setEditing(null);setShowForm(true)}}>＋ 新增任务</button></div>
-    <div className="task-summary"><div><small>当前列表</small><strong>{tasks.length}</strong></div><div><small>已完成</small><strong>{completed}</strong></div><div><small>未完成</small><strong>{tasks.length-completed}</strong></div><div><small>待处理关联记录</small><strong>{tasks.reduce((sum,task)=>sum+taskRecords(task).filter(record=>["待填写","待审核","待验收"].includes(record.status)).length,0)}</strong></div></div>
+    <div className="task-summary">
+      <button type="button" className={status==="all"?"active":""} aria-pressed={status==="all"} onClick={()=>setStatus("all")}><small>全部任务</small><strong>{summary.total}</strong></button>
+      <button type="button" className={status==="completed"?"active":""} aria-pressed={status==="completed"} onClick={()=>setStatus("completed")}><small>已完成</small><strong>{summary.completed}</strong></button>
+      <button type="button" className={status==="incomplete"?"active":""} aria-pressed={status==="incomplete"} onClick={()=>setStatus("incomplete")}><small>未完成</small><strong>{summary.incomplete}</strong></button>
+      <div><small>待处理关联记录</small><strong>{summary.pendingRecords}</strong></div>
+    </div>
     <div className="task-filters">
       <label>完成状态<select value={status} onChange={event=>setStatus(event.target.value as typeof status)}><option value="all">全部任务</option><option value="incomplete">未完成</option><option value="completed">已完成</option></select></label>
       <label>计划开始日期<input type="date" value={start} onChange={event=>setStart(event.target.value)}/></label>
       <label>计划结束日期<input type="date" value={end} onChange={event=>setEnd(event.target.value)}/></label>
-      <button onClick={()=>{setStatus("all");setStart("");setEnd("")}}>重置筛选</button>
+      <button onClick={()=>{setStatus("incomplete");setStart("");setEnd("")}}>重置筛选</button>
     </div>
     <div className="task-list">
       {tasks.map(task=>{
