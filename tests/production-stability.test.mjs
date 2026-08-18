@@ -109,6 +109,12 @@ test("task management supports CRUD filters and service record links", async () 
   assert.match(dashboard, /record\.projectId===projectId&&\(!isAcceptedRecord\(record\)\|\|recordIds\.includes\(record\.id\)\)/);
   assert.match(route, /只能关联同一项目下尚未验收的有效服务记录/);
   assert.match(route, /records\.length>0&&records\.every/);
+  assert.match(dashboard, /useState<"all"\|"completed"\|"incomplete">\("incomplete"\)/);
+  assert.match(dashboard, />全部任务<\/small>/);
+  assert.match(dashboard, /onClick=\{\(\)=>setStatus\("completed"\)\}/);
+  assert.match(dashboard, /onClick=\{\(\)=>setStatus\("incomplete"\)\}/);
+  assert.match(route, /summary:\{total:derivedTasks\.length,completed,incomplete:derivedTasks\.length-completed,pendingRecords\}/);
+  assert.match(styles, /\.task-summary>button\.active/);
   assert.match(styles, /\.task-actions \.primary\{[^}]*background:var\(--blue\)[^}]*color:#fff!important/);
   assert.match(migration, /delivery_task_records/);
 });
