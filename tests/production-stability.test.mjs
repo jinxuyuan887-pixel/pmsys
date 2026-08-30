@@ -125,6 +125,11 @@ test("service records expose a read-only detail view with image previews", async
   assert.match(dashboard, /onView=\{\(record\)=>\{setViewingRecord\(record\);setModal\("viewRecord"\)\}\}/);
   assert.match(dashboard, />查看<\/button>/);
   assert.match(dashboard, /function ViewRecordDialog/);
+  assert.match(dashboard, /服务总价/);
+  assert.match(dashboard, /总成本/);
+  assert.match(dashboard, /单项利润率/);
+  assert.match(dashboard, /window\.history\.pushState/);
+  assert.match(dashboard, /addEventListener\("popstate"/);
   assert.match(dashboard, /<Attachments recordId=\{record\.id\} previewImages\/>/);
   assert.match(dashboard, /file\.contentType\?\.startsWith\("image\/"\)/);
   assert.match(filesRoute, /searchParams\.get\("inline"\)==="1"/);
