@@ -24,7 +24,7 @@ test("record API uses soft deletion and server-side amount snapshots", async () 
   assert.match(route, /costUnitSnapshot/);
   assert.match(route, /costAmountSnapshot/);
   assert.match(route, /profitRateBasisPoints/);
-  assert.match(route, /咨询师成本和物料成本/);
+  assert.match(route, /师资、物料、差旅和其他四类成本/);
 });
 
 test("record cost migration supports frozen profit calculations", async () => {
@@ -181,13 +181,10 @@ test("service records use date ranges, assessment records, and split cost inputs
   }
   for (const type of ["讲座／团辅活动记录","心理咨询台账","培训活动记录","驻场服务记录","EAP宣传记录","心理测评记录"]) assert.match(recordTypes, new RegExp(type));
   for (const source of [dashboard, linkRoute, recordRoute]) assert.match(source, /recordTypeForServiceName/);
-  assert.match(dashboard, /name="consultantCostUnit"/);
-  assert.match(dashboard, /name="materialCostUnit"/);
-  assert.match(recordRoute, /consultantCostOf/);
-  assert.match(recordRoute, /materialCostOf/);
+  for (const field of ["teacherCostUnit","materialCostUnit","travelCostUnit","otherCostUnit"]) assert.match(dashboard, new RegExp(`name="${field}"`));
+  for (const helper of ["consultantCostOf","materialCostOf","travelCostOf","otherCostOf"]) assert.match(recordRoute, new RegExp(helper));
   assert.match(recordRoute, /服务结束日期不能早于开始日期/);
-  assert.match(dashboard, /咨询师成本/);
-  assert.match(dashboard, /物料成本/);
+  for (const label of ["师资费用","物料费用","差旅费用","其他费用"]) assert.match(dashboard, new RegExp(label));
 });
 
 test("new project price inputs start blank instead of displaying zero", async () => {
