@@ -756,7 +756,7 @@ function ManagerRecordForm({projects,defaultProjectId,defaultServiceId,lockProje
       <label>服务人员<input name="provider" placeholder="可在验收时补充"/></label>
       <label>服务开始日期<input name="startDate" type="date" required/></label><label>服务结束日期<input name="endDate" type="date"/></label><label>本次完成数量<input name="quantity" type="number" min="1" defaultValue="1" required/></label>
       <label>师资费用单价（元）<input name="teacherCostUnit" type="number" min="0" step="0.01" value={consultantCostUnit} onChange={e=>setConsultantCostUnit(e.target.value)} placeholder="验收时必填，无费用填0"/></label>
-      <label>物料成本单价（元）<input name="materialCostUnit" type="number" min="0" step="0.01" value={materialCostUnit} onChange={e=>setMaterialCostUnit(e.target.value)} placeholder="验收时必填，无成本填0"/></label>
+      <label>物料费用单价（元）<input name="materialCostUnit" type="number" min="0" step="0.01" value={materialCostUnit} onChange={e=>setMaterialCostUnit(e.target.value)} placeholder="验收时必填，无费用填0"/></label>
       <label>差旅费用单价（元）<input name="travelCostUnit" type="number" min="0" step="0.01" value={travelCostUnit} onChange={e=>setTravelCostUnit(e.target.value)} placeholder="无费用填0"/></label>
       <label>其他费用单价（元）<input name="otherCostUnit" type="number" min="0" step="0.01" value={otherCostUnit} onChange={e=>setOtherCostUnit(e.target.value)} placeholder="无费用填0"/></label>
       <div className="profit-preview"><small>服务单价</small><strong>{money(selectedService?.unitPrice??0)}</strong><small>单条利润率</small><strong className={profitRate!==null&&profitRate<0?"negative-profit":""}>{profitRate===null?"填写成本后计算":`${profitRate.toFixed(1)}%`}</strong></div>
@@ -993,12 +993,12 @@ function Consultants({records,projects,onView}:{records:ServiceRecord[];projects
   },new Map<string,{provider:string;serviceName:string;unit:string;consultantPrice:number;materialPrice:number;price:number;quantity:number;count:number;total:number}>()).values())
     .sort((a,b)=>a.provider.localeCompare(b.provider,"zh-CN")||a.serviceName.localeCompare(b.serviceName,"zh-CN")||b.price-a.price);
   return <section className="content-card consultant-page">
-    <div className="section-title"><div><h2>咨询师归集</h2><p>仅统计已验收交付记录；咨询师成本与物料成本分别归集展示</p></div></div>
+    <div className="section-title"><div><h2>咨询师归集</h2><p>仅统计已验收交付记录；师资费用与物料费用分别归集展示</p></div></div>
     <div className="consultant-summary">
       <div><small>已归集咨询师</small><strong>{consultant==="all"?consultants.length:filtered.length?1:0} 人</strong></div>
       <div><small>累计服务数量</small><strong>{totalQuantity.toLocaleString("zh-CN")}</strong></div>
-      <div><small>累计咨询师成本</small><strong>{money(totalConsultantCost)}</strong></div>
-      <div><small>累计物料成本</small><strong>{money(totalMaterialCost)}</strong></div>
+      <div><small>累计师资费用</small><strong>{money(totalConsultantCost)}</strong></div>
+      <div><small>累计物料费用</small><strong>{money(totalMaterialCost)}</strong></div>
     </div>
     <div className="consultant-filter">
       <label><span>搜索咨询师</span><input value={query} onChange={event=>setQuery(event.target.value)} placeholder="输入姓名模糊搜索"/></label>
@@ -1007,13 +1007,13 @@ function Consultants({records,projects,onView}:{records:ServiceRecord[];projects
     </div>
     <div className="consultant-section-title"><div><h3>服务价格汇总</h3><p>同一咨询师的不同服务、不同验收成本分别归集</p></div><span>{priceGroups.length} 个价格项</span></div>
     <div className="consultant-price-table">
-      <div className="consultant-price-row heading"><span>咨询师</span><span>服务内容</span><span>咨询师成本</span><span>物料成本</span><span>服务数量</span><span>记录数</span><span>累计总成本</span></div>
+      <div className="consultant-price-row heading"><span>咨询师</span><span>服务内容</span><span>师资费用</span><span>物料费用</span><span>服务数量</span><span>记录数</span><span>累计总成本</span></div>
       {priceGroups.map(group=><div className="consultant-price-row" key={`${group.provider}-${group.serviceName}-${group.consultantPrice}-${group.materialPrice}`}><strong>{group.provider}</strong><span>{group.serviceName}</span><span className="consultant-price">{money(group.consultantPrice)} / {group.unit}</span><span>{money(group.materialPrice)} / {group.unit}</span><span>{group.quantity} {group.unit}</span><span>{group.count} 条</span><strong>{money(group.total)}</strong></div>)}
       {!priceGroups.length&&<div className="empty-records"><strong>暂无符合条件的已验收记录</strong><span>服务记录验收通过后，将自动归集到这里</span></div>}
     </div>
     <div className="consultant-section-title detail-title"><div><h3>服务明细</h3><p>数据与服务记录同步，按执行时间从近到远排列</p></div><span>{filtered.length} 条</span></div>
     <div className="consultant-detail-table">
-      <div className="consultant-detail-row heading"><span>执行时间</span><span>咨询师</span><span>项目／服务</span><span>服务数量</span><span>咨询师成本</span><span>物料成本</span><span>总成本</span><span>验收时间</span><span>操作</span></div>
+      <div className="consultant-detail-row heading"><span>执行时间</span><span>咨询师</span><span>项目／服务</span><span>服务数量</span><span>师资费用</span><span>物料费用</span><span>总成本</span><span>验收时间</span><span>操作</span></div>
       {filtered.map(record=>{
         const {project,service}=servicesFor(record),data=record.payload.data??{};
         const quantity=Number(data.quantity??1),start=recordStartDate(data),end=recordEndDate(data);
@@ -1097,7 +1097,7 @@ function ReviewRecordDialog({record,projects,notify,close,onApproved}:{record:Se
     <section className="review-section review-finance"><h3>审核及成本确认</h3><div className="review-finance-grid">
       <div><small>服务单价</small><strong>{money(service?.unitPrice??0)} / {service?.unit??"次"}</strong></div>
       <label>师资费用单价（元）<input aria-label="审核师资费用单价" type="number" min="0" step="0.01" value={consultantCostUnit} onChange={e=>setConsultantCostUnit(e.target.value)} required placeholder="无费用请填0"/></label>
-      <label>物料成本单价（元）<input aria-label="审核物料成本单价" type="number" min="0" step="0.01" value={materialCostUnit} onChange={e=>setMaterialCostUnit(e.target.value)} required placeholder="无物料成本请填0"/></label>
+      <label>物料费用单价（元）<input aria-label="审核物料费用单价" type="number" min="0" step="0.01" value={materialCostUnit} onChange={e=>setMaterialCostUnit(e.target.value)} required placeholder="无物料费用请填0"/></label>
       <label>差旅费用单价（元）<input aria-label="审核差旅费用单价" type="number" min="0" step="0.01" value={travelCostUnit} onChange={e=>setTravelCostUnit(e.target.value)} required placeholder="无费用请填0"/></label>
       <label>其他费用单价（元）<input aria-label="审核其他费用单价" type="number" min="0" step="0.01" value={otherCostUnit} onChange={e=>setOtherCostUnit(e.target.value)} required placeholder="无费用请填0"/></label>
       <div><small>合计成本单价</small><strong>{totalCost===null?"填写成本后计算":money(totalCost)}</strong></div>
@@ -1133,7 +1133,7 @@ function AcceptanceRecordForm({record,projects,onSave,close}:{record:ServiceReco
       <label>服务结束日期<input name="endDate" type="date" required defaultValue={recordEndDate(data)}/></label>
       <label>本次完成数量<input name="quantity" type="number" min="1" required value={quantity} onChange={event=>setQuantity(event.target.value)}/></label>
       <label>师资费用单价（元）<input name="teacherCostUnit" type="number" min="0" step="0.01" required value={consultantCostUnit} onChange={event=>setConsultantCostUnit(event.target.value)} placeholder="无费用请填0"/></label>
-      <label>物料成本单价（元）<input name="materialCostUnit" type="number" min="0" step="0.01" required value={materialCostUnit} onChange={event=>setMaterialCostUnit(event.target.value)} placeholder="无成本请填0"/></label>
+      <label>物料费用单价（元）<input name="materialCostUnit" type="number" min="0" step="0.01" required value={materialCostUnit} onChange={event=>setMaterialCostUnit(event.target.value)} placeholder="无费用请填0"/></label>
       <label>差旅费用单价（元）<input name="travelCostUnit" type="number" min="0" step="0.01" required value={travelCostUnit} onChange={event=>setTravelCostUnit(event.target.value)} placeholder="无费用请填0"/></label>
       <label>其他费用单价（元）<input name="otherCostUnit" type="number" min="0" step="0.01" required value={otherCostUnit} onChange={event=>setOtherCostUnit(event.target.value)} placeholder="无费用请填0"/></label>
       <label>满意度（10分制，选填）<input name="satisfaction" type="number" min="0" max="10" step="0.01" defaultValue={data.satisfaction===undefined?"":Number(data.satisfaction)} placeholder="支持两位小数"/></label>
@@ -1251,7 +1251,7 @@ function EditRecordForm({record,projects,onSave,close}:{record:ServiceRecord;pro
       <label>服务人员<input name="provider" required={isAcceptedRecord(record)} defaultValue={String(data.provider??"")}/></label>
       <label>服务开始日期<input name="startDate" type="date" required defaultValue={recordStartDate(data)}/></label><label>服务结束日期<input name="endDate" type="date" required={isAcceptedRecord(record)} defaultValue={String(data.endDate??"")}/></label><label>本次完成数量<input name="quantity" type="number" min="1" required value={quantity} onChange={e=>setQuantity(e.target.value)}/></label>
       <label>师资费用单价（元）<input name="teacherCostUnit" type="number" min="0" step="0.01" value={consultantCostUnit} onChange={e=>setConsultantCostUnit(e.target.value)} required={isAcceptedRecord(record)} placeholder="无费用请填0"/></label>
-      <label>物料成本单价（元）<input name="materialCostUnit" type="number" min="0" step="0.01" value={materialCostUnit} onChange={e=>setMaterialCostUnit(e.target.value)} required={isAcceptedRecord(record)} placeholder="无物料成本请填0"/></label>
+      <label>物料费用单价（元）<input name="materialCostUnit" type="number" min="0" step="0.01" value={materialCostUnit} onChange={e=>setMaterialCostUnit(e.target.value)} required={isAcceptedRecord(record)} placeholder="无物料费用请填0"/></label>
       <label>差旅费用单价（元）<input name="travelCostUnit" type="number" min="0" step="0.01" value={travelCostUnit} onChange={e=>setTravelCostUnit(e.target.value)} required={isAcceptedRecord(record)} placeholder="无费用请填0"/></label>
       <label>其他费用单价（元）<input name="otherCostUnit" type="number" min="0" step="0.01" value={otherCostUnit} onChange={e=>setOtherCostUnit(e.target.value)} required={isAcceptedRecord(record)} placeholder="无费用请填0"/></label>
       <label>满意度（10分制，选填）<input name="satisfaction" type="number" min="0" max="10" step="0.01" defaultValue={data.satisfaction===undefined?"":Number(data.satisfaction)} placeholder="支持两位小数"/></label>

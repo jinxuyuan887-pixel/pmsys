@@ -185,6 +185,8 @@ test("service records use date ranges, assessment records, and split cost inputs
   for (const helper of ["consultantCostOf","materialCostOf","travelCostOf","otherCostOf"]) assert.match(recordRoute, new RegExp(helper));
   assert.match(recordRoute, /服务结束日期不能早于开始日期/);
   for (const label of ["师资费用","物料费用","差旅费用","其他费用"]) assert.match(dashboard, new RegExp(label));
+  assert.doesNotMatch(dashboard, /物料成本单价/);
+  assert.doesNotMatch(dashboard, /咨询师成本/);
 });
 
 test("new project price inputs start blank instead of displaying zero", async () => {
