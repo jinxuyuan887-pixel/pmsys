@@ -1,5 +1,6 @@
 @import "tailwindcss";
 .form-section-heading{grid-column:1/-1;background:#f3f7fb;border-left:3px solid var(--blue);padding:9px 12px;border-radius:5px;color:#24445a;font-weight:700;margin-top:4px}
+.example-field small{font-size:12px;font-weight:400;line-height:1.5;color:var(--muted)}.example-field:focus-within small{display:none}
 
 :root{--navy:#123454;--navy2:#082945;--blue:#1767ba;--green:#48aa81;--red:#e45b5b;--amber:#e5a33d;--text:#172838;--muted:#71808e;--border:#e1e8ed;--bg:#f4f7f7}
 *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font-family:"PingFang SC","Noto Sans SC","Microsoft YaHei",Arial,sans-serif}button,input,select{font:inherit}button{cursor:pointer}

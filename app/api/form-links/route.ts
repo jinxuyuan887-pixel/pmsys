@@ -16,12 +16,13 @@ export async function POST(request:Request){
     if(!remark)return Response.json({error:"请填写活动备注，方便识别该链接"},{status:400});
     if(remark.length>200)return Response.json({error:"活动备注不能超过200字"},{status:400});
     const startDate=String(body.startDate??""),quantity=Number(body.quantity);
-    if(!/^\d{4}-\d{2}-\d{2}$/.test(startDate))return Response.json({error:"请选择服务开始日期"},{status:400});
     if(!Number.isFinite(quantity)||quantity<=0||quantity>100000)return Response.json({error:"服务数量必须大于0且不超过100000"},{status:400});
     const db=await getDb(),[row]=await db.select().from(projects).where(and(eq(projects.id,projectId),isNull(projects.archivedAt))).limit(1);
     const project=row?JSON.parse(row.payload) as {name?:string;manager?:string;managerIds?:number[];services?:Array<{id:number;name:string}>}:null;
     const service=project?.services?.find(item=>item.id===serviceId);
     if(!project||!service)return Response.json({error:"项目或服务内容不存在"},{status:400});
+    const requestedType=recordTypeForServiceName(service.name);
+    if(requestedType!=="心理访谈记录"&&!/^\d{4}-\d{2}-\d{2}$/.test(startDate))return Response.json({error:"请选择服务开始日期"},{status:400});
     if(!canAccessProject(auth.user,project))return Response.json({error:"无权为该项目生成填写链接"},{status:403});
     const formType=recordTypeForServiceName(service.name);
     const token=randomHex(24).toUpperCase(),days=Number(body.expiresInDays);

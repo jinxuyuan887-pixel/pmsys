@@ -16,7 +16,7 @@ const materialCostOf=(data?:Record<string,unknown>)=>Number(data?.materialCostUn
 const travelCostOf=(data?:Record<string,unknown>)=>Number(data?.travelCostUnit??0);
 const otherCostOf=(data?:Record<string,unknown>)=>Number(data?.otherCostUnit??0);
 const costOf=(data?:Record<string,unknown>)=>consultantCostOf(data)+materialCostOf(data)+travelCostOf(data)+otherCostOf(data);
-const dateOf=(data?:Record<string,unknown>)=>String(data?.startDate??data?.date??"");
+const dateOf=(data?:Record<string,unknown>,type?:string)=>type==="心理访谈记录"?String(data?.interviewDate??""):String(data?.startDate??data?.date??"");
 const endDateOf=(data?:Record<string,unknown>)=>String(data?.endDate??data?.startDate??data?.date??"");
 const isAccepted=(status:string)=>["已验收","已完成"].includes(status);
 const validDate=(value:string)=>/^\d{4}-\d{2}-\d{2}$/.test(value)&&!Number.isNaN(new Date(`${value}T00:00:00`).getTime());
@@ -28,15 +28,23 @@ function validateInitiation(type:string,data?:Record<string,unknown>){
   const quantity=quantityOf(data);
   if(!allowedTypes.includes(type))return "记录类型不正确";
   if(!Number.isFinite(quantity)||quantity<=0||quantity>100000)return "完成数量必须大于0且不超过100000";
-  if(!validDate(dateOf(data)))return "请选择正确的服务开始日期";
+  if(type==="心理访谈记录"){
+    if(!validDate(dateOf(data,type)))return "请选择正确的访谈日期";
+    if(!/^\d{2}:\d{2}$/.test(String(data?.interviewStartTime??"")))return "请选择访谈开始时间";
+    const duration=Number(data?.duration);if(!Number.isFinite(duration)||duration<=0||duration>1440)return "访谈时长必须大于0且不超过1440分钟";
+    return null;
+  }
+  if(!validDate(dateOf(data,type)))return "请选择正确的服务开始日期";
   if(hasValue(data?.endDate)&&!validDate(endDateOf(data)))return "请选择正确的服务结束日期";
   if(hasValue(data?.endDate)&&endDateOf(data)<dateOf(data))return "服务结束日期不能早于开始日期";
   return null;
 }
 function validateForAcceptance(type:string,data?:Record<string,unknown>){
   const initiation=validateInitiation(type,data);if(initiation)return initiation;
-  if(!hasValue(data?.endDate)||!validDate(String(data?.endDate)))return "验收前请填写正确的服务结束日期";
-  if(String(data?.endDate)<dateOf(data))return "服务结束日期不能早于开始日期";
+  if(type!=="心理访谈记录"){
+    if(!hasValue(data?.endDate)||!validDate(String(data?.endDate)))return "验收前请填写正确的服务结束日期";
+    if(String(data?.endDate)<dateOf(data,type))return "服务结束日期不能早于开始日期";
+  }
   if(type==="心理访谈记录"){
     if(!String(data?.consultantName??data?.provider??"").trim())return "请填写咨询师姓名";
     if(!String(data?.assessmentSummary??data?.summary??"").trim())return "请填写访谈评估综述";
@@ -55,7 +63,9 @@ function validateForAcceptance(type:string,data?:Record<string,unknown>){
     if(!["无风险","需要跟进","重点关注"].includes(String(data?.risk??"")))return "请选择风险情况";
   }else if(type==="心理访谈记录"){
     if(!String(data?.intervieweeName??"").trim())return "请填写受访者姓名";
-    if(!String(data?.interviewDate??data?.startDate??"").trim())return "请选择访谈日期";
+    if(!String(data?.interviewDate??"").trim())return "请选择访谈日期";
+    if(!/^\d{2}:\d{2}$/.test(String(data?.interviewStartTime??"")))return "请选择访谈开始时间";
+    const duration=Number(data?.duration);if(!Number.isFinite(duration)||duration<=0||duration>1440)return "访谈时长必须大于0且不超过1440分钟";
     if(!String(data?.riskLevel??"").trim())return "请选择心理健康风险等级";
     if(!String(data?.assessmentSummary??"").trim())return "请填写访谈评估综述";
     if(!String(data?.consultantName??data?.provider??"").trim())return "请填写咨询师姓名";
@@ -152,7 +162,7 @@ export async function POST(request:Request){
     const validation=validateInitiation(type,body.data);if(validation)throw new Error(validation);
     const now=new Date().toISOString(),status="待验收";
     const recordValues={
-      projectId,serviceId,recordType:type,serviceDate:dateOf(body.data),
+      projectId,serviceId,recordType:type,serviceDate:dateOf(body.data,type),
       payload:JSON.stringify({...body,data:{...body.data,status}}),status,
       unitPriceSnapshot:null,amountSnapshot:null,costUnitSnapshot:null,costAmountSnapshot:null,profitRateBasisPoints:null,
       updatedAt:now,approvedAt:null
@@ -211,7 +221,7 @@ export async function PATCH(request:Request){
     if(hasFrozenFinance)nextPayload.data={...nextPayload.data,teacherCostUnit:consultantCostUnit,consultantCostUnit,materialCostUnit,travelCostUnit,otherCostUnit,costUnit};
     const profitRate=unitPrice&&costUnit!==null?Math.round((unitPrice-costUnit)/unitPrice*10000):null;
     const [record]=await db.update(serviceRecords).set({
-      status:nextStatus,projectId,serviceId,recordType:type,serviceDate:dateOf(nextPayload.data),payload:JSON.stringify(nextPayload),
+      status:nextStatus,projectId,serviceId,recordType:type,serviceDate:dateOf(nextPayload.data,type),payload:JSON.stringify(nextPayload),
       unitPriceSnapshot:unitPrice,amountSnapshot:unitPrice===null?null:roundMoney(unitPrice*quantityOf(nextPayload.data)),
       costUnitSnapshot:costUnit,costAmountSnapshot:costUnit===null?null:roundMoney(costUnit*quantityOf(nextPayload.data)),profitRateBasisPoints:profitRate,
       updatedAt:now,approvedAt:isAccepted(nextStatus)?(isAccepted(current.status)?current.approvedAt??now:now):null

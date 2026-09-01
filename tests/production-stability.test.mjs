@@ -240,6 +240,7 @@ test("project reset restores the original seven-item service catalog", async () 
 test("external forms use the selected record type and defer full validation to acceptance", async () => {
   const form = await read("app/form/[token]/service-form.tsx");
   const route = await read("app/api/records/route.ts");
+  const dashboard = await read("app/ui/DashboardApp.tsx");
   for (const service of ["线上咨询","线下咨询","驻场咨询"]) {
     assert.match(form, new RegExp(service));
     assert.match(route, new RegExp(service));
@@ -247,6 +248,7 @@ test("external forms use the selected record type and defer full validation to a
   assert.match(form, /meta\.formType==="心理咨询台账"/);
   assert.match(form, /心理访谈记录/);
   assert.match(await read("drizzle/0016_psychological_interview.sql"), /心理访谈/);
+  assert.match(dashboard, /<option>心理访谈<\/option>/);
   assert.match(form, /咨询时长（分钟）/);
   assert.match(form, /咨询概括/);
   assert.match(form, /defaultValue=\{meta\.startDate\}/);

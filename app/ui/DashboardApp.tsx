@@ -783,7 +783,7 @@ function LinkDialog({projects,selectedProjectId,lockProject=false,notify,onGener
   const selectedService=current?.services.find(service=>service.id===serviceId)??current?.services[0];
   const formType=recordTypeForServiceName(selectedService?.name??"");
   async function generate(form:FormData){
-    const response=await fetch(appPath("/api/form-links"),{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({projectId,serviceId,formType,remark,startDate:String(form.get("startDate")),quantity:Number(form.get("quantity"))||1,expiresInDays:Number(form.get("expiresInDays"))||undefined,maxSubmissions:1})});
+    const response=await fetch(appPath("/api/form-links"),{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({projectId,serviceId,formType,remark,startDate:String(form.get("startDate")),quantity:Number(form.get("quantity"))||1,expiresInDays:Number(form.get("expiresInDays"))||undefined,maxSubmissions:Number(form.get("maxSubmissions"))||1})});
     const data=await response.json().catch(()=>({})) as {path?:string;record?:ServiceRecord;error?:string};
     if(!response.ok||!data.path||!data.record){notify(data.error??"链接生成失败，请重试");return}
     if(onGenerated)await onGenerated(data.record);
@@ -792,8 +792,8 @@ function LinkDialog({projects,selectedProjectId,lockProject=false,notify,onGener
   return <form action={generate}><div className="modal-title"><h2>发起外部填写服务</h2><p>生成链接时同步创建一条“待填写”记录；咨询师提交后自动进入待验收。</p></div>
     {!link?<div className="form-grid">{lockProject?<label className="full">对应项目（任务已锁定）<input value={current?.name??"项目不存在"} readOnly/></label>:<label className="full">对应项目<ProjectSearchSelect projects={projects} value={projectId} onChange={value=>{const id=Number(value),project=projects.find(item=>item.id===id);setProjectId(id);setServiceId(project?.services[0]?.id??0)}}/></label>}
       <label className="full">对应服务内容<select name="serviceId" value={serviceId} onChange={event=>setServiceId(Number(event.target.value))} required>{current?.services.map(service=><option value={service.id} key={service.id}>{service.name}（{service.unit}）</option>)}</select></label>
-      <label>台账模板（自动匹配）<input name="formType" value={formType} readOnly/></label><label>服务开始日期<input name="startDate" type="date" required/></label>
-      <label>服务数量<input name="quantity" type="number" min="1" defaultValue="1" required/></label><label>链接有效期<select name="expiresInDays"><option value="7">7天</option><option value="30">30天</option><option value="">永久有效</option></select></label>
+      <label>台账模板（自动匹配）<input name="formType" value={formType} readOnly/></label>{formType==="心理访谈记录"?null:<label>服务开始日期<input name="startDate" type="date" required/></label>}
+      <label>服务数量<input name="quantity" type="number" min="1" defaultValue="1" required/></label>{formType==="心理访谈记录"&&<label>最大提交次数<input name="maxSubmissions" type="number" min="1" max="100" defaultValue="100" required/></label>}<label>链接有效期<select name="expiresInDays"><option value="7">7天</option><option value="30">30天</option><option value="">永久有效</option></select></label>
       <label className="full">活动备注<textarea name="remark" value={remark} onChange={event=>setRemark(event.target.value)} maxLength={200} required placeholder="如：8月压力管理团辅｜王老师｜第一场"/></label></div>:
       <div className="generated-link"><span>✓</span><h3>外部填写服务已发起</h3><p>{link}</p><small>活动备注：{remark}</small><small>服务记录已显示为“待填写”，咨询师提交后转为“待验收”</small></div>}
     <div className="modal-actions"><button type="button" onClick={close}>关闭</button>{!link?<button className="primary">生成链接</button>:<button type="button" className="primary" onClick={async()=>notify(await copyText(link)?"填写链接已复制":"复制失败，请手动选择链接复制")}>复制链接</button>}</div>
@@ -1301,7 +1301,7 @@ function ProjectFileLibrary({projects}:{projects:Project[]}){
 }
 function CatalogForm({onSave}:{onSave:(item:ServiceTemplate)=>void}) {
   return <form action={(form)=>onSave({id:Date.now(),name:String(form.get("name")),category:String(form.get("category")),defaultUnit:String(form.get("unit")),enabled:true})}><div className="modal-title"><h2>新增服务名称</h2><p>目录不保存价格，不同项目可以使用不同数量和单价。</p></div>
-    <div className="form-grid"><label className="full">服务名称<input name="name" required placeholder="如：心理嘉年华"/></label><label>服务分类<select name="category"><option>心理咨询</option><option>活动</option><option>培训</option><option>测评</option><option>宣传</option><option>其他服务</option></select></label>
+    <div className="form-grid"><label className="full">服务名称<input name="name" required placeholder="如：心理嘉年华"/></label><label>服务分类<select name="category"><option>心理访谈</option><option>心理咨询</option><option>活动</option><option>培训</option><option>测评</option><option>宣传</option><option>其他服务</option></select></label>
       <label>默认计量单位<select name="unit"><option>场</option><option>人次</option><option>小时</option><option>天</option><option>期</option><option>份</option></select></label></div>
     <div className="modal-actions"><button type="button">取消</button><button className="primary">保存到服务目录</button></div></form>;
 }

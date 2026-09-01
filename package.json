@@ -18,9 +18,11 @@
     "api-token:create": "bash scripts/sites-env.sh -- node scripts/create-analytics-token.mjs"
   },
   "dependencies": {
+    "@types/pdfkit": "^0.17.6",
     "better-sqlite3": "13.0.2",
     "drizzle-orm": "0.45.2",
     "next": "16.2.6",
+    "pdfkit": "^0.20.2",
     "react": "19.2.6",
     "react-dom": "19.2.6"
   },
