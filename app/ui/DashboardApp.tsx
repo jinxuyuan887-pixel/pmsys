@@ -77,6 +77,7 @@ const nav = [
   ["projects", "▣", "项目管理"],
   ["tasks", "☑", "任务管理"],
   ["records", "▤", "服务记录"],
+  ["interviews", "☷", "心理访谈"],
   ["consultants", "♧", "咨询师归集"],
   ["links", "↗", "填写链接"],
   ["governance", "◫", "操作日志"],
@@ -541,6 +542,7 @@ export default function DashboardApp({currentUser}:{currentUser:CurrentUser}) {
         )}
 
         {page === "records" && !selected && <Records records={records} projects={projects.filter(project=>!project._archivedAt)} managerFilter={managerFilter} onManagerFilterChange={setManagerFilter} refresh={async()=>{await Promise.all([refreshRecords(),refreshProjects()])}} notify={notify} onManagerRecord={()=>setModal("managerRecord")} onLink={()=>setModal("link")} onView={(record)=>{setViewingRecord(record);setModal("viewRecord")}} onReview={(record)=>{setReviewingRecord(record);setModal("reviewRecord")}} onAccept={acceptRecord} onPayment={togglePayment} onEdit={(record)=>{setEditingRecord(record);setModal("editRecord")}}/>}
+        {page === "interviews" && !selected && <InterviewRecords records={records} projects={projects.filter(project=>!project._archivedAt)} onView={(record)=>{setViewingRecord(record);setModal("viewRecord")}} onReview={(record)=>{setReviewingRecord(record);setModal("reviewRecord")}}/>}
         {page === "tasks" && !selected && <TaskManagement projects={projects.filter(project=>!project._archivedAt)} records={records} currentUser={currentUser} managers={projectManagerAccounts} notify={notify} onAddRecord={task=>{setTaskRecordTarget(task);setModal("taskRecordMethod")}} onReview={record=>{setReviewingRecord(record);setModal("reviewRecord")}} onAccept={acceptRecord} onView={record=>{setViewingRecord(record);setModal("viewRecord")}}/>}
         {page === "consultants" && !selected && <Consultants records={records} projects={projects} onView={(record)=>{setViewingRecord(record);setModal("viewRecord")}}/>}
         {page === "links" && !selected && <ExternalLinks projects={projects} notify={notify} onAdd={()=>setModal("link")}/>}
@@ -723,6 +725,14 @@ function ProjectSearchSelect({projects,value,onChange,name,allowAll=false,placeh
 }
 
 function RecordDetailFields({recordType,data={},required=false}:{recordType:string;data?:Record<string,unknown>;required?:boolean}){
+  if(recordType==="心理访谈记录") return <>
+    <div className="full form-section-heading">受访者基本信息</div>
+    <label>受访者姓名<input name="intervieweeName" required={required} defaultValue={String(data.intervieweeName??"")}/></label><label>性别<select name="gender" defaultValue={String(data.gender??"")}><option value="">请选择</option><option>男</option><option>女</option><option>其他</option></select></label><label>年龄<input name="age" type="number" min="1" max="120" defaultValue={data.age===undefined?"":Number(data.age)}/></label><label>学历<input name="education" defaultValue={String(data.education??"")}/></label><label>司龄<input name="companyTenure" defaultValue={String(data.companyTenure??"")}/></label><label>部门<input name="department" defaultValue={String(data.department??"")}/></label><label>岗位<input name="position" defaultValue={String(data.position??"")}/></label><label>婚姻状况<input name="maritalStatus" defaultValue={String(data.maritalStatus??"")}/></label><label>子女数<input name="childrenCount" type="number" min="0" defaultValue={data.childrenCount===undefined?"":Number(data.childrenCount)}/></label><label>手机号<input name="phone" type="tel" defaultValue={String(data.phone??"")}/></label><label className="full">访谈原因<textarea name="interviewReason" required={required} defaultValue={String(data.interviewReason??"")}/></label>
+    <label>心理测评风险等级<select name="testRiskLevel" required={required} defaultValue={String(data.testRiskLevel??"")}><option value="">请选择</option><option>红码</option><option>橙码</option><option>黄码</option><option>绿码</option></select></label><label>心理健康风险等级<select name="riskLevel" required={required} defaultValue={String(data.riskLevel??"")}><option value="">请选择</option><option>高风险</option><option>中风险</option><option>低风险</option><option>无明显风险</option></select></label><label>风险等级与测评是否一致<select name="riskConsistent" defaultValue={String(data.riskConsistent??"")}><option value="">请选择</option><option>一致</option><option>不一致</option><option>无法判断</option></select></label><label className="full">后续心理服务方案建议<textarea name="serviceSuggestions" defaultValue={String(data.serviceSuggestions??"")}/></label>
+    <div className="full form-section-heading">访谈要点记录</div>{[["作答真实性","answerAuthenticity"],["情绪状况","emotionStatus"],["家庭与生活状况","familyLifeStatus"],["工作压力状况","workStressStatus"],["压力应对方式","copingStyle"],["人际支持状况","socialSupportStatus"],["身体健康状况","physicalHealthStatus"],["对公司是否有其他需求","companyNeeds"]].map(([label,name])=><label className="full" key={name}>{label}<textarea name={name} defaultValue={String(data[name]??"")}/></label>)}
+    <div className="full form-section-heading">访谈过程评估</div><label>思维表达清晰程度<select name="expressionClarity" defaultValue={String(data.expressionClarity??"")}><option value="">请选择</option><option>清晰</option><option>基本清晰</option><option>混乱</option></select></label><label>认知能力<select name="cognition" defaultValue={String(data.cognition??"")}><option value="">请选择</option><option>较高</option><option>正常</option><option>偏低</option></select></label><label className="full">访谈过程补充说明<textarea name="processNotes" defaultValue={String(data.processNotes??"")}/></label>
+    <div className="full form-section-heading">评估综述</div><label className="full">基本介绍<textarea name="basicIntroduction" defaultValue={String(data.basicIntroduction??"")}/></label><label className="full">重点分析<textarea name="keyAnalysis" defaultValue={String(data.keyAnalysis??"")}/></label><label className="full">访谈评估综述<textarea name="assessmentSummary" required={required} defaultValue={String(data.assessmentSummary??"")}/></label><label className="full">评估建议<textarea name="assessmentAdvice" defaultValue={String(data.assessmentAdvice??"")}/></label><label>访谈日期<input name="interviewDate" type="date" required={required} defaultValue={String(data.interviewDate??data.startDate??"")}/></label><label>咨询师姓名<input name="consultantName" required={required} defaultValue={String(data.consultantName??data.provider??"")}/></label>
+  </>;
   return recordType==="心理咨询台账"?<>
     <label>咨询方式<select name="method" required={required} defaultValue={String(data.method??"")}><option value="">请选择</option><option>线上咨询</option><option>线下咨询</option><option>驻场咨询</option></select></label>
     <label>咨询时长（分钟）<input name="duration" type="number" min="1" required={required} defaultValue={data.duration===undefined?"":Number(data.duration)}/></label>
@@ -893,6 +903,11 @@ function TaskForm({editing,projects,records,managers,currentUser,onSave,close}:{
   </form>;
 }
 
+function InterviewRecords({records,projects,onView,onReview}:{records:ServiceRecord[];projects:Project[];onView:(record:ServiceRecord)=>void;onReview:(record:ServiceRecord)=>void}){
+  const interviews=records.filter(record=>record.recordType==="心理访谈记录");
+  return <section className="content-card"><div className="section-title"><div><h2>心理访谈记录</h2><p>集中查看咨询师通过外发链接提交的心理测评测后访谈</p></div><strong>{interviews.length} 条</strong></div><div className="link-table"><div className="link-row heading"><span>受访者</span><span>项目</span><span>访谈日期</span><span>风险等级</span><span>咨询师</span><span>状态</span><span>操作</span></div>{interviews.map(record=>{const data=record.payload.data??{};const project=projects.find(item=>item.id===record.projectId);return <div className="link-row" key={record.id}><strong>{String(data.intervieweeName??"未填写")}</strong><span>{project?.name??"项目已归档"}</span><span>{String(data.interviewDate??data.startDate??"未填写")}</span><span>{String(data.riskLevel??"未评估")}</span><span>{String(data.consultantName??data.provider??"未填写")}</span><Status value={record.status}/><span><button onClick={()=>onView(record)}>查看</button>{record.status==="待验收"&&<button onClick={()=>onReview(record)}>审核</button>}{<button onClick={()=>window.open(appPath(`/api/interviews/${record.id}/report`),"_blank","noopener,noreferrer")}>导出报告</button>}</span></div>})}{!interviews.length&&<div className="empty-records"><strong>暂无心理访谈记录</strong><span>生成心理访谈外发链接后，咨询师提交的记录会显示在这里。</span></div>}</div></section>;
+}
+
 function Records({records,projects,managerFilter,onManagerFilterChange,refresh,notify,onManagerRecord,onLink,onView,onReview,onAccept,onPayment,onEdit}:{records:ServiceRecord[];projects:Project[];managerFilter:string;onManagerFilterChange:(manager:string)=>void;refresh:()=>Promise<void>;notify:(s:string)=>void;onManagerRecord:()=>void;onLink:()=>void;onView:(record:ServiceRecord)=>void;onReview:(record:ServiceRecord)=>void;onAccept:(record:ServiceRecord)=>void;onPayment:(record:ServiceRecord)=>void;onEdit:(record:ServiceRecord)=>void}) {
   const [period,setPeriod]=useState<"week"|"month"|"all"|"custom">("month");
   const [recordStatus,setRecordStatus]=useState<"all"|"delivered"|"pending">("all");
@@ -1028,13 +1043,14 @@ const recordFieldLabels:Record<string,string>={
   provider:"服务人员",date:"服务日期（历史）",startDate:"服务开始日期",endDate:"服务结束日期",quantity:"完成数量",summary:"服务执行情况",
   teacherCostUnit:"师资费用单价",consultantCostUnit:"师资费用单价（历史字段）",materialCostUnit:"物料费用单价",travelCostUnit:"差旅费用单价",otherCostUnit:"其他费用单价",
   method:"咨询方式",duration:"咨询时长（分钟）",issueType:"问题类型",risk:"风险情况",
-  topic:"活动主题",participants:"参与人数",location:"活动地点",satisfaction:"满意度（10分制）",source:"填写来源"
+  topic:"活动主题",participants:"参与人数",location:"活动地点",satisfaction:"满意度（10分制）",source:"填写来源",
+  intervieweeName:"受访者姓名",gender:"性别",age:"年龄",education:"学历",companyTenure:"司龄",department:"部门",position:"岗位",maritalStatus:"婚姻状况",childrenCount:"子女数",phone:"手机号",interviewReason:"访谈原因",testRiskLevel:"心理测评风险等级",riskLevel:"心理健康风险等级",riskConsistent:"风险等级与测评是否一致",serviceSuggestions:"后续心理服务方案建议",answerAuthenticity:"作答真实性",emotionStatus:"情绪状况",familyLifeStatus:"家庭与生活状况",workStressStatus:"工作压力状况",copingStyle:"压力应对方式",socialSupportStatus:"人际支持状况",physicalHealthStatus:"身体健康状况",companyNeeds:"对公司是否有其他需求",expressionClarity:"思维表达清晰程度",cognition:"认知能力",processNotes:"访谈过程补充说明",basicIntroduction:"基本介绍",keyAnalysis:"重点分析",assessmentSummary:"访谈评估综述",assessmentAdvice:"评估建议",interviewDate:"访谈日期",consultantName:"咨询师姓名"
 };
 function ViewRecordDialog({record,projects,close}:{record:ServiceRecord;projects:Project[];close:()=>void}){
   const project=projects.find(item=>item.id===record.projectId);
   const service=project?.services.find(item=>item.id===record.serviceId);
   const data=record.payload.data??{};
-  const hidden=new Set(["projectId","serviceId","recordType","status","costUnit","consultantCostUnit","materialCostUnit","formToken"]);
+  const hidden=new Set(["projectId","serviceId","recordType","status","costUnit","consultantCostUnit","materialCostUnit","formToken","source"]);
   const details=Object.entries(data).filter(([key,value])=>!hidden.has(key)&&value!==""&&value!==null&&value!==undefined);
   const quantity=Number(data.quantity??1),unitPrice=Number(record.unitPriceSnapshot??service?.unitPrice??0),unitCost=Number(record.costUnitSnapshot??consultantCost(record)+materialCost(record)+travelCost(record)+otherCost(record)),revenue=record.amountSnapshot??roundMoney(unitPrice*quantity),cost=record.costAmountSnapshot??(isAcceptedRecord(record)?roundMoney(unitCost*quantity):null),profitRate=cost!==null&&revenue>0?(revenue-cost)/revenue*100:null;
   const timestamp=isAcceptedRecord(record)&&record.approvedAt?record.approvedAt:record.updatedAt||record.createdAt;
@@ -1061,7 +1077,7 @@ function ViewRecordDialog({record,projects,close}:{record:ServiceRecord;projects
       <div><small>总成本</small><strong>{cost===null?"验收时填写":money(cost)}</strong></div>
       <div><small>单项利润率</small><strong className={profitRate!==null&&profitRate<0?"negative-profit":""}>{profitRate===null?"验收后计算":`${profitRate.toFixed(2)}%`}</strong></div>
     </div></section>
-    <div className="modal-actions"><button type="button" className="primary" onClick={close}>关闭</button></div>
+    <div className="modal-actions">{record.recordType==="心理访谈记录"&&<button type="button" onClick={()=>window.open(appPath(`/api/interviews/${record.id}/report`),"_blank","noopener,noreferrer")}>导出访谈报告</button>}<button type="button" className="primary" onClick={close}>关闭</button></div>
   </div>;
 }
 function ReviewRecordDialog({record,projects,notify,close,onApproved}:{record:ServiceRecord;projects:Project[];notify:(s:string)=>void;close:()=>void;onApproved:()=>Promise<void>}){

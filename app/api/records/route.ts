@@ -7,7 +7,7 @@ import type { CurrentUser } from "../../auth";
 import { canAccessProject } from "../../project-access";
 import { recordTypeForServiceName } from "../../service-record-types";
 
-const allowedTypes=["讲座／团辅活动记录","心理咨询台账","培训活动记录","驻场服务记录","EAP宣传记录","心理测评记录"];
+const allowedTypes=["讲座／团辅活动记录","心理咨询台账","心理访谈记录","培训活动记录","驻场服务记录","EAP宣传记录","心理测评记录"];
 const quantityOf=(data?:Record<string,unknown>)=>Number(data?.quantity??1);
 const hasValue=(value:unknown)=>value!==undefined&&value!==null&&value!=="";
 const hasCost=(data?:Record<string,unknown>)=>(hasValue(data?.teacherCostUnit??data?.consultantCostUnit)&&hasValue(data?.materialCostUnit)&&hasValue(data?.travelCostUnit)&&hasValue(data?.otherCostUnit))||hasValue(data?.costUnit);
@@ -37,8 +37,13 @@ function validateForAcceptance(type:string,data?:Record<string,unknown>){
   const initiation=validateInitiation(type,data);if(initiation)return initiation;
   if(!hasValue(data?.endDate)||!validDate(String(data?.endDate)))return "验收前请填写正确的服务结束日期";
   if(String(data?.endDate)<dateOf(data))return "服务结束日期不能早于开始日期";
-  if(!String(data?.provider??"").trim())return "请填写服务人员";
-  if(!String(data?.summary??"").trim())return "请填写服务执行情况";
+  if(type==="心理访谈记录"){
+    if(!String(data?.consultantName??data?.provider??"").trim())return "请填写咨询师姓名";
+    if(!String(data?.assessmentSummary??data?.summary??"").trim())return "请填写访谈评估综述";
+  }else{
+    if(!String(data?.provider??"").trim())return "请填写服务人员";
+    if(!String(data?.summary??"").trim())return "请填写服务执行情况";
+  }
   if(hasValue(data?.satisfaction)){
     const satisfaction=Number(data?.satisfaction);
     if(!Number.isFinite(satisfaction)||satisfaction<0||satisfaction>10||Math.abs(satisfaction*100-Math.round(satisfaction*100))>1e-8)return "满意度必须是0到10分之间、最多两位小数";
@@ -48,6 +53,12 @@ function validateForAcceptance(type:string,data?:Record<string,unknown>){
     const duration=Number(data?.duration);
     if(!Number.isFinite(duration)||duration<=0||duration>1440)return "咨询时长必须大于0且不超过1440分钟";
     if(!["无风险","需要跟进","重点关注"].includes(String(data?.risk??"")))return "请选择风险情况";
+  }else if(type==="心理访谈记录"){
+    if(!String(data?.intervieweeName??"").trim())return "请填写受访者姓名";
+    if(!String(data?.interviewDate??data?.startDate??"").trim())return "请选择访谈日期";
+    if(!String(data?.riskLevel??"").trim())return "请选择心理健康风险等级";
+    if(!String(data?.assessmentSummary??"").trim())return "请填写访谈评估综述";
+    if(!String(data?.consultantName??data?.provider??"").trim())return "请填写咨询师姓名";
   }else{
     if(!String(data?.topic??"").trim())return "请填写活动主题";
     const participants=Number(data?.participants);
@@ -127,7 +138,7 @@ export async function POST(request:Request){
       if(!link)return Response.json({error:"链接不存在、已过期或已达到提交次数"},{status:404});
       reservedToken=body.token;projectId=link.projectId;serviceId=link.serviceId;type=link.formType;
       const candidates=await db.select().from(serviceRecords).where(and(eq(serviceRecords.projectId,projectId),eq(serviceRecords.serviceId,serviceId),eq(serviceRecords.status,"待填写"),isNull(serviceRecords.deletedAt)));
-      pendingRecord=candidates.find(record=>{
+      pendingRecord=link.formType==="心理访谈记录" && link.submissionCount>1 ? undefined : candidates.find(record=>{
         const payload=JSON.parse(record.payload) as {data?:Record<string,unknown>};
         return payload.data?.formToken===body.token;
       });

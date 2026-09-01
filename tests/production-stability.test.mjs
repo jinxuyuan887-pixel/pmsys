@@ -179,7 +179,7 @@ test("service records use date ranges, assessment records, and split cost inputs
     assert.match(source, /name="startDate"/);
     assert.match(source, /name="endDate"/);
   }
-  for (const type of ["讲座／团辅活动记录","心理咨询台账","培训活动记录","驻场服务记录","EAP宣传记录","心理测评记录"]) assert.match(recordTypes, new RegExp(type));
+  for (const type of ["讲座／团辅活动记录","心理咨询台账","心理访谈记录","培训活动记录","驻场服务记录","EAP宣传记录","心理测评记录"]) assert.match(recordTypes, new RegExp(type));
   for (const source of [dashboard, linkRoute, recordRoute]) assert.match(source, /recordTypeForServiceName/);
   for (const field of ["teacherCostUnit","materialCostUnit","travelCostUnit","otherCostUnit"]) assert.match(dashboard, new RegExp(`name="${field}"`));
   for (const helper of ["consultantCostOf","materialCostOf","travelCostOf","otherCostOf"]) assert.match(recordRoute, new RegExp(helper));
@@ -245,6 +245,8 @@ test("external forms use the selected record type and defer full validation to a
     assert.match(route, new RegExp(service));
   }
   assert.match(form, /meta\.formType==="心理咨询台账"/);
+  assert.match(form, /心理访谈记录/);
+  assert.match(await read("drizzle/0016_psychological_interview.sql"), /心理访谈/);
   assert.match(form, /咨询时长（分钟）/);
   assert.match(form, /咨询概括/);
   assert.match(form, /defaultValue=\{meta\.startDate\}/);
