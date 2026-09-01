@@ -10,10 +10,12 @@ import { recordTypeForServiceName } from "../../service-record-types";
 const allowedTypes=["讲座／团辅活动记录","心理咨询台账","培训活动记录","驻场服务记录","EAP宣传记录","心理测评记录"];
 const quantityOf=(data?:Record<string,unknown>)=>Number(data?.quantity??1);
 const hasValue=(value:unknown)=>value!==undefined&&value!==null&&value!=="";
-const hasCost=(data?:Record<string,unknown>)=>(hasValue(data?.consultantCostUnit)&&hasValue(data?.materialCostUnit))||hasValue(data?.costUnit);
-const consultantCostOf=(data?:Record<string,unknown>)=>Number(data?.consultantCostUnit??data?.costUnit??0);
+const hasCost=(data?:Record<string,unknown>)=>(hasValue(data?.teacherCostUnit??data?.consultantCostUnit)&&hasValue(data?.materialCostUnit)&&hasValue(data?.travelCostUnit)&&hasValue(data?.otherCostUnit))||hasValue(data?.costUnit);
+const consultantCostOf=(data?:Record<string,unknown>)=>Number(data?.teacherCostUnit??data?.consultantCostUnit??data?.costUnit??0);
 const materialCostOf=(data?:Record<string,unknown>)=>Number(data?.materialCostUnit??0);
-const costOf=(data?:Record<string,unknown>)=>consultantCostOf(data)+materialCostOf(data);
+const travelCostOf=(data?:Record<string,unknown>)=>Number(data?.travelCostUnit??0);
+const otherCostOf=(data?:Record<string,unknown>)=>Number(data?.otherCostUnit??0);
+const costOf=(data?:Record<string,unknown>)=>consultantCostOf(data)+materialCostOf(data)+travelCostOf(data)+otherCostOf(data);
 const dateOf=(data?:Record<string,unknown>)=>String(data?.startDate??data?.date??"");
 const endDateOf=(data?:Record<string,unknown>)=>String(data?.endDate??data?.startDate??data?.date??"");
 const isAccepted=(status:string)=>["已验收","已完成"].includes(status);
@@ -187,13 +189,15 @@ export async function PATCH(request:Request){
     if(body.status==="已验收"&&current.status!=="待验收")return Response.json({error:"只有待验收记录可以执行验收"},{status:400});
     const hasFrozenFinance=isAccepted(nextStatus);
     const unitPrice=hasFrozenFinance?Number(target.service.unitPrice)||0:null,now=new Date().toISOString();
-    if(hasFrozenFinance&&!hasCost(nextPayload.data))return Response.json({error:"请填写咨询师成本和物料成本后再提交验收"},{status:400});
+    if(hasFrozenFinance&&!hasCost(nextPayload.data))return Response.json({error:"请填写师资、物料、差旅和其他四类成本后再提交验收，无费用请填0"},{status:400});
     if(hasFrozenFinance&&Number(unitPrice)<=0)return Response.json({error:"当前服务单价为0，无法计算利润率，请先修改项目服务单价"},{status:400});
     const consultantCostUnit=hasFrozenFinance?consultantCostOf(nextPayload.data):null;
     const materialCostUnit=hasFrozenFinance?materialCostOf(nextPayload.data):null;
+    const travelCostUnit=hasFrozenFinance?travelCostOf(nextPayload.data):null;
+    const otherCostUnit=hasFrozenFinance?otherCostOf(nextPayload.data):null;
     const costUnit=hasFrozenFinance?costOf(nextPayload.data):null;
-    if([consultantCostUnit,materialCostUnit,costUnit].some(value=>value!==null&&(!Number.isFinite(value)||value<0||value>100000000)))return Response.json({error:"咨询师成本和物料成本必须为0或正数"},{status:400});
-    if(hasFrozenFinance)nextPayload.data={...nextPayload.data,consultantCostUnit,materialCostUnit,costUnit};
+    if([consultantCostUnit,materialCostUnit,travelCostUnit,otherCostUnit,costUnit].some(value=>value!==null&&(!Number.isFinite(value)||value<0||value>100000000)))return Response.json({error:"四类成本必须为0或正数"},{status:400});
+    if(hasFrozenFinance)nextPayload.data={...nextPayload.data,teacherCostUnit:consultantCostUnit,consultantCostUnit,materialCostUnit,travelCostUnit,otherCostUnit,costUnit};
     const profitRate=unitPrice&&costUnit!==null?Math.round((unitPrice-costUnit)/unitPrice*10000):null;
     const [record]=await db.update(serviceRecords).set({
       status:nextStatus,projectId,serviceId,recordType:type,serviceDate:dateOf(nextPayload.data),payload:JSON.stringify(nextPayload),
