@@ -754,6 +754,7 @@ function ManagerRecordForm({projects,defaultProjectId,defaultServiceId,lockProje
   const [materialCostUnit,setMaterialCostUnit]=useState("");
   const [travelCostUnit,setTravelCostUnit]=useState("");
   const [otherCostUnit,setOtherCostUnit]=useState("");
+  const [quantity,setQuantity]=useState("1");
   const selectedService=current?.services.find(service=>service.id===serviceId)??current?.services[0];
   const recordType=recordTypeForServiceName(selectedService?.name??"");
   const totalCost=[consultantCostUnit,materialCostUnit,travelCostUnit,otherCostUnit].every(value=>value!=="")?[consultantCostUnit,materialCostUnit,travelCostUnit,otherCostUnit].reduce((sum,value)=>sum+Number(value),0):null;
@@ -764,12 +765,12 @@ function ManagerRecordForm({projects,defaultProjectId,defaultServiceId,lockProje
       <label>服务内容<select name="serviceId" value={serviceId} onChange={e=>{setServiceId(Number(e.target.value));setConsultantCostUnit("");setMaterialCostUnit("")}}>{current?.services.map(service=><option value={service.id} key={service.id}>{service.name}（剩余 {Math.max(0,service.quantity-service.completed)} {service.unit}）</option>)}</select></label>
       <label>台账模板（自动匹配）<input name="recordType" value={recordType} readOnly/></label>
       <label>服务人员<input name="provider" placeholder="可在验收时补充"/></label>
-      <label>服务开始日期<input name="startDate" type="date" required/></label><label>服务结束日期<input name="endDate" type="date"/></label><label>本次完成数量<input name="quantity" type="number" min="1" defaultValue="1" required/></label>
+      <label>服务开始日期<input name="startDate" type="date" required/></label><label>服务结束日期<input name="endDate" type="date"/></label><label>本次完成数量<input name="quantity" type="number" min="1" value={quantity} onChange={e=>setQuantity(e.target.value)} required/></label>
       <label>师资费用单价（元）<input name="teacherCostUnit" type="number" min="0" step="0.01" value={consultantCostUnit} onChange={e=>setConsultantCostUnit(e.target.value)} placeholder="验收时必填，无费用填0"/></label>
       <label>物料费用单价（元）<input name="materialCostUnit" type="number" min="0" step="0.01" value={materialCostUnit} onChange={e=>setMaterialCostUnit(e.target.value)} placeholder="验收时必填，无费用填0"/></label>
       <label>差旅费用单价（元）<input name="travelCostUnit" type="number" min="0" step="0.01" value={travelCostUnit} onChange={e=>setTravelCostUnit(e.target.value)} placeholder="无费用填0"/></label>
       <label>其他费用单价（元）<input name="otherCostUnit" type="number" min="0" step="0.01" value={otherCostUnit} onChange={e=>setOtherCostUnit(e.target.value)} placeholder="无费用填0"/></label>
-      <div className="profit-preview"><small>服务单价</small><strong>{money(selectedService?.unitPrice??0)}</strong><small>单条利润率</small><strong className={profitRate!==null&&profitRate<0?"negative-profit":""}>{profitRate===null?"填写成本后计算":`${profitRate.toFixed(1)}%`}</strong></div>
+      <div className="profit-preview"><small>服务单价</small><strong>{money(selectedService?.unitPrice??0)}</strong><small>预计服务总价（单价 × 数量）</small><strong>{money((selectedService?.unitPrice??0)*Math.max(1,Number(quantity)||1))}</strong><small>单条利润率</small><strong className={profitRate!==null&&profitRate<0?"negative-profit":""}>{profitRate===null?"填写成本后计算":`${profitRate.toFixed(1)}%`}</strong></div>
       <RecordDetailFields recordType={recordType}/>
       <label className="full">现场图片、课件及其他资料<input name="files" type="file" multiple accept=".jpg,.jpeg,.png,.pdf,.ppt,.pptx,.doc,.docx,.xls,.xlsx"/></label></div>
     <div className="modal-actions"><button type="button" onClick={close}>取消</button><button className="primary">发起服务，进入待验收</button></div></form>;
@@ -778,6 +779,7 @@ function LinkDialog({projects,selectedProjectId,lockProject=false,notify,onGener
   const [projectId,setProjectId]=useState(selectedProjectId??projects[0]?.id??0);
   const [link,setLink]=useState("");
   const [remark,setRemark]=useState("");
+  const [quantity,setQuantity]=useState("1");
   const current=projects.find(project=>project.id===projectId);
   const [serviceId,setServiceId]=useState(current?.services[0]?.id??0);
   const selectedService=current?.services.find(service=>service.id===serviceId)??current?.services[0];
@@ -793,7 +795,7 @@ function LinkDialog({projects,selectedProjectId,lockProject=false,notify,onGener
     {!link?<div className="form-grid">{lockProject?<label className="full">对应项目（任务已锁定）<input value={current?.name??"项目不存在"} readOnly/></label>:<label className="full">对应项目<ProjectSearchSelect projects={projects} value={projectId} onChange={value=>{const id=Number(value),project=projects.find(item=>item.id===id);setProjectId(id);setServiceId(project?.services[0]?.id??0)}}/></label>}
       <label className="full">对应服务内容<select name="serviceId" value={serviceId} onChange={event=>setServiceId(Number(event.target.value))} required>{current?.services.map(service=><option value={service.id} key={service.id}>{service.name}（{service.unit}）</option>)}</select></label>
       <label>台账模板（自动匹配）<input name="formType" value={formType} readOnly/></label>{formType==="心理访谈记录"?null:<label>服务开始日期<input name="startDate" type="date" required/></label>}
-      <label>服务数量<input name="quantity" type="number" min="1" defaultValue="1" required/></label>{formType==="心理访谈记录"&&<label>最大提交次数<input name="maxSubmissions" type="number" min="1" max="100" defaultValue="100" required/></label>}<label>链接有效期<select name="expiresInDays"><option value="7">7天</option><option value="30">30天</option><option value="">永久有效</option></select></label>
+      <label>服务数量<input name="quantity" type="number" min="1" value={quantity} onChange={e=>setQuantity(e.target.value)} required/></label>{formType==="心理访谈记录"&&<label>最大提交次数<input name="maxSubmissions" type="number" min="1" max="100" defaultValue="100" required/></label>}<label>链接有效期<select name="expiresInDays"><option value="7">7天</option><option value="30">30天</option><option value="">永久有效</option></select></label><div className="profit-preview"><small>服务单价</small><strong>{money(selectedService?.unitPrice??0)}</strong><small>预计服务总价（单价 × 数量）</small><strong>{money((selectedService?.unitPrice??0)*Math.max(1,Number(quantity)||1))}</strong></div>
       <label className="full">活动备注<textarea name="remark" value={remark} onChange={event=>setRemark(event.target.value)} maxLength={200} required placeholder="如：8月压力管理团辅｜王老师｜第一场"/></label></div>:
       <div className="generated-link"><span>✓</span><h3>外部填写服务已发起</h3><p>{link}</p><small>活动备注：{remark}</small><small>服务记录已显示为“待填写”，咨询师提交后转为“待验收”</small></div>}
     <div className="modal-actions"><button type="button" onClick={close}>关闭</button>{!link?<button className="primary">生成链接</button>:<button type="button" className="primary" onClick={async()=>notify(await copyText(link)?"填写链接已复制":"复制失败，请手动选择链接复制")}>复制链接</button>}</div>
